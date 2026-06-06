@@ -1,3 +1,43 @@
+# ── Private context files (not for public) ───────────────────────────────────
 DEV_FLOW.md
 Context.md
-\.Context
+.context/
+
+# ── Secrets — NEVER commit these ─────────────────────────────────────────────
+.env
+.env.local
+.env.production
+.env.*
+!.env.example        # .env.example IS safe to commit (no real values)
+
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+*.egg-info/
+dist/
+build/
+
+# ── Node / Extension ──────────────────────────────────────────────────────────
+node_modules/
+extension/out/
+extension/*.vsix      # built packages — don't need to be in repo
+npm-debug.log*
+
+# ── IDEs ─────────────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ── OS ────────────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── Logs ─────────────────────────────────────────────────────────────────────
+*.log
+logs/

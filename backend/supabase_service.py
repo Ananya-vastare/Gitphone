@@ -335,3 +335,33 @@ def count_stats() -> dict:
         print(f"[supabase] count_stats error: {e}")
         return {}
 
+
+def get_staged_files_by_ids(file_ids: list[str]) -> list[dict]:
+    """Fetch specific staged files by their UUIDs (for direct commit)."""
+    if not file_ids:
+        return []
+    try:
+        result = get_client().table("staged_files") \
+            .select("*") \
+            .in_("id", file_ids) \
+            .eq("status", "pending") \
+            .execute()
+        return result.data or []
+    except Exception as e:
+        print(f"[supabase] get_staged_files_by_ids error: {e}")
+        return []
+
+
+def mark_files_committed(file_ids: list[str]) -> bool:
+    """Mark staged files as committed after a direct commit succeeds."""
+    if not file_ids:
+        return True
+    try:
+        get_client().table("staged_files") \
+            .update({"status": "committed"}) \
+            .in_("id", file_ids) \
+            .execute()
+        return True
+    except Exception as e:
+        print(f"[supabase] mark_files_committed error: {e}")
+        return False

@@ -4,8 +4,8 @@ import { initCache, clearAll as clearCache } from './localCache';
 import { initStatusBar, setConnected, setDisconnected, dispose as disposeStatusBar } from './statusBar';
 import { onFileSaved, onFileCreated, onFileDeleted, onFileRenamed, resetStagedCount } from './fileWatcher';
 import { SetupPanel } from './setupPanel';
-import { getVersion, healthCheck, syncFile } from './api';
-import { StagedFilesProvider, StagedFileItem } from './stagedFilesProvider';
+import { getVersion, healthCheck } from './api';
+import { StagedFilesProvider, StagedFileItem, StagedFile, showStagedDiff } from './stagedFilesProvider';
 import axios from 'axios';
 
 // ── Global provider instance (shared between commands) ─────────────────────
@@ -115,21 +115,59 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       }
     }),
 
-    // Open a staged file locally
-    vscode.commands.registerCommand('gitphone.openStagedFile', async (filepath: string) => {
-      const workspaceFolders = vscode.workspace.workspaceFolders;
-      if (!workspaceFolders) return;
+    // ── Show diff when clicking a staged file ─────────────────────────────────
+    vscode.commands.registerCommand('gitphone.showDiff', async (file: StagedFile) => {
+      await showStagedDiff(file, context);
+    }),
 
-      for (const folder of workspaceFolders) {
-        const uri = vscode.Uri.joinPath(folder.uri, filepath);
-        try {
-          await vscode.window.showTextDocument(uri, { preview: true });
-          return;
-        } catch {
-          // File might not exist locally — try next folder
-        }
+    // ── Direct Commit from Extension ──────────────────────────────────
+    vscode.commands.registerCommand('gitphone.commitAll', async () => {
+      await directCommit(context, stagedFilesProvider, null);
+    }),
+
+    // Commit a single specific file (right-click → Commit This File)
+    vscode.commands.registerCommand('gitphone.commitFile', async (item: StagedFileItem) => {
+      if (!item?.file) return;
+      await directCommit(context, stagedFilesProvider, item.file);
+    }),
+
+    // ── Clear all stale staged files ───────────────────────────────────
+    vscode.commands.registerCommand('gitphone.clearStagedFiles', async () => {
+      const config = getConfig();
+      if (!config) return;
+      const files = stagedFilesProvider.stagedFiles;
+      if (files.length === 0) {
+        vscode.window.showInformationMessage('No staged files to clear.');
+        return;
       }
-      vscode.window.showWarningMessage(`File not found locally: ${filepath}`);
+      const confirm = await vscode.window.showWarningMessage(
+        `Clear all ${files.length} staged file(s)?\nThis removes them from the staging queue only — your actual files are safe.`,
+        { modal: true },
+        'Clear All',
+      );
+      if (confirm !== 'Clear All') return;
+
+      try {
+        await axios.post(
+          `${config.backendUrl}/staged-files/clear-all`,
+          {},
+          {
+            timeout: 8_000,
+            headers: {
+              'X-Telegram-Id': config.telegramId,
+              'X-Api-Key': config.apiKey ?? '',
+            },
+          },
+        );
+        stagedFilesProvider.clearAll();
+        resetStagedCount(0);
+        vscode.window.showInformationMessage('✅ Staged files cleared.');
+      } catch {
+        // Fallback: clear locally even if backend fails
+        stagedFilesProvider.clearAll();
+        resetStagedCount(0);
+        vscode.window.showInformationMessage('Cleared locally. Backend may still have entries.');
+      }
     }),
 
     // Manually force-stage the current open file
@@ -358,6 +396,98 @@ async function showStatusMenu(): Promise<void> {
       );
       break;
   }
+}
+
+
+/**
+ * Direct commit from the extension — no Telegram needed.
+ * Asks for a commit message then calls /commit-direct on the backend.
+ * If singleFile is provided, only that file is committed.
+ */
+async function directCommit(
+  context: vscode.ExtensionContext,
+  provider: StagedFilesProvider,
+  singleFile: import('./stagedFilesProvider').StagedFile | null,
+): Promise<void> {
+  const config = getConfig();
+  if (!config) {
+    vscode.window.showWarningMessage('GitPhone not configured. Open Setup first.');
+    return;
+  }
+
+  const files = singleFile ? [singleFile] : provider.stagedFiles;
+  if (files.length === 0) {
+    vscode.window.showInformationMessage('No staged files to commit.');
+    return;
+  }
+
+  // Show file list in input prompt
+  const fileList = files.slice(0, 5).map(f => {
+    const icon = f.change_type === 'create' ? '➕' : f.change_type === 'delete' ? '🗑️' : '✏️';
+    return `${icon} ${f.filepath}`;
+  }).join(', ') + (files.length > 5 ? ` +${files.length - 5} more` : '');
+
+  const message = await vscode.window.showInputBox({
+    prompt: `Commit message for: ${fileList}`,
+    placeHolder: 'e.g. fix: update login logic',
+    validateInput: (v) => v.trim() ? null : 'Commit message cannot be empty',
+  });
+
+  if (!message) return; // User cancelled
+
+  await vscode.window.withProgress(
+    {
+      location: vscode.ProgressLocation.Notification,
+      title: '📱 GitPhone: Committing...',
+      cancellable: false,
+    },
+    async (progress) => {
+      progress.report({ message: `Pushing ${files.length} file(s) to GitHub...` });
+
+      try {
+        const fileIds = files.map(f => f.id);
+        const response = await axios.post(
+          `${config.backendUrl}/commit-direct`,
+          {
+            telegram_id: config.telegramId,
+            file_ids: fileIds,
+            commit_message: message,
+          },
+          {
+            timeout: 30_000,
+            headers: {
+              'X-Telegram-Id': config.telegramId,
+              'X-Api-Key': config.apiKey ?? '',
+            },
+          }
+        );
+
+        const data = response.data;
+        if (data.ok) {
+          const sha = data.commit_sha?.slice(0, 7) ?? 'done';
+          // Remove committed files from sidebar
+          for (const f of files) {
+            provider.removeFile(f.id);
+          }
+
+          const action = await vscode.window.showInformationMessage(
+            `✅ Committed! [${sha}] — "${message}"`,
+            'View on GitHub',
+          );
+          if (action === 'View on GitHub' && data.commit_url) {
+            vscode.env.openExternal(vscode.Uri.parse(data.commit_url));
+          }
+        } else {
+          vscode.window.showErrorMessage(
+            `❌ Commit failed: ${data.message ?? 'Unknown error'}`,
+          );
+        }
+      } catch (err: any) {
+        const detail = err?.response?.data?.detail ?? err?.message ?? 'Unknown error';
+        vscode.window.showErrorMessage(`❌ GitPhone commit failed: ${detail}`);
+      }
+    }
+  );
 }
 
 

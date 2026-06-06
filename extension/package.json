@@ -2,7 +2,7 @@
   "name": "gitphone",
   "displayName": "GitPhone",
   "description": "Commit to GitHub from anywhere — stage in VS Code, commit via Telegram bot",
-  "version": "1.4.1",
+  "version": "1.4.2",
   "publisher": "ankittroy-21",
   "license": "SEE LICENSE IN LICENSE",
   "homepage": "https://github.com/ankittroy-21/gitphone#readme",
@@ -82,14 +82,29 @@
         "icon": "$(refresh)"
       },
       {
+        "command": "gitphone.commitAll",
+        "title": "Commit All Staged Files",
+        "icon": "$(cloud-upload)"
+      },
+      {
+        "command": "gitphone.commitFile",
+        "title": "Commit This File",
+        "icon": "$(cloud-upload)"
+      },
+      {
+        "command": "gitphone.clearStagedFiles",
+        "title": "Clear All Staged",
+        "icon": "$(clear-all)"
+      },
+      {
         "command": "gitphone.unstageFile",
         "title": "Unstage File",
         "icon": "$(remove)"
       },
       {
-        "command": "gitphone.openStagedFile",
-        "title": "Open File",
-        "icon": "$(go-to-file)"
+        "command": "gitphone.showDiff",
+        "title": "Show Diff",
+        "icon": "$(diff)"
       },
       {
         "command": "gitphone.stageCurrentFile",
@@ -105,21 +120,41 @@
     "menus": {
       "view/title": [
         {
-          "command": "gitphone.refreshStagedFiles",
+          "command": "gitphone.commitAll",
           "when": "view == gitphone.stagedFiles",
           "group": "navigation@1"
         },
         {
-          "command": "gitphone.openSetup",
+          "command": "gitphone.refreshStagedFiles",
           "when": "view == gitphone.stagedFiles",
           "group": "navigation@2"
+        },
+        {
+          "command": "gitphone.clearStagedFiles",
+          "when": "view == gitphone.stagedFiles",
+          "group": "navigation@3"
+        },
+        {
+          "command": "gitphone.openSetup",
+          "when": "view == gitphone.stagedFiles",
+          "group": "navigation@4"
         }
       ],
       "view/item/context": [
         {
+          "command": "gitphone.commitFile",
+          "when": "viewItem == stagedFile",
+          "group": "inline@1"
+        },
+        {
+          "command": "gitphone.showDiff",
+          "when": "viewItem == stagedFile",
+          "group": "inline@2"
+        },
+        {
           "command": "gitphone.unstageFile",
           "when": "viewItem == stagedFile",
-          "group": "inline"
+          "group": "inline@3"
         }
       ]
     }

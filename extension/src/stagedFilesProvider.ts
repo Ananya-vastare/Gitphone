@@ -1,11 +1,13 @@
 /**
  * stagedFilesProvider.ts — TreeDataProvider for the GitPhone sidebar panel.
  *
- * Shows all staged files fetched from the backend.
- * Users can manually unstage files or refresh the list.
+ * Shows all staged files from the backend, grouped by change type.
+ * Clicking a file shows an inline diff vs. the current local version.
  */
 
 import * as vscode from 'vscode';
+import * as path from 'path';
+import * as fs from 'fs';
 import axios from 'axios';
 import { getConfig, isConfigured } from './config';
 
@@ -18,6 +20,9 @@ export interface StagedFile {
   is_binary: boolean;
   staged_at: string;
   status: 'pending' | 'committed';
+  change_type?: 'create' | 'modify' | 'delete';
+  diff?: string;
+  repo?: string;
 }
 
 // ── Tree Item ─────────────────────────────────────────────────────────────────
@@ -29,23 +34,40 @@ export class StagedFileItem extends vscode.TreeItem {
   ) {
     super(file.filepath, collapsibleState);
 
-    // Show just the filename as label, full path as description
     const parts = file.filepath.replace(/\\/g, '/').split('/');
     this.label = parts[parts.length - 1];
     this.description = parts.slice(0, -1).join('/') || '';
 
-    this.tooltip = `${file.filepath}\n${_formatSize(file.file_size)}\nStaged: ${_timeAgo(file.staged_at)}`;
-    this.iconPath = file.is_binary
-      ? new vscode.ThemeIcon('file-binary', new vscode.ThemeColor('gitDecoration.modifiedResourceForeground'))
-      : new vscode.ThemeIcon('file-code', new vscode.ThemeColor('gitDecoration.modifiedResourceForeground'));
+    const changeLabel =
+      file.change_type === 'create' ? '➕ New' :
+      file.change_type === 'delete' ? '🗑️ Deleted' :
+      '✏️ Modified';
+
+    this.tooltip = new vscode.MarkdownString(
+      `**${file.filepath}**\n\n` +
+      `${changeLabel}  •  ${_formatSize(file.file_size)}\n\n` +
+      `Staged: ${_timeAgo(file.staged_at)}\n\n` +
+      `_Click to view diff_`
+    );
+
+    // Icon differs by change type
+    if (file.change_type === 'create') {
+      this.iconPath = new vscode.ThemeIcon('diff-added', new vscode.ThemeColor('gitDecoration.addedResourceForeground'));
+    } else if (file.change_type === 'delete') {
+      this.iconPath = new vscode.ThemeIcon('diff-removed', new vscode.ThemeColor('gitDecoration.deletedResourceForeground'));
+    } else {
+      this.iconPath = file.is_binary
+        ? new vscode.ThemeIcon('file-binary', new vscode.ThemeColor('gitDecoration.modifiedResourceForeground'))
+        : new vscode.ThemeIcon('diff-modified', new vscode.ThemeColor('gitDecoration.modifiedResourceForeground'));
+    }
 
     this.contextValue = 'stagedFile';
 
-    // Command: clicking opens the file if it exists locally
+    // Click → show diff
     this.command = {
-      command: 'gitphone.openStagedFile',
-      title: 'Open File',
-      arguments: [file.filepath],
+      command: 'gitphone.showDiff',
+      title: 'Show Diff',
+      arguments: [file],
     };
   }
 }
@@ -68,41 +90,34 @@ export class StagedFilesProvider implements vscode.TreeDataProvider<vscode.TreeI
   private _loading = false;
   private _error: string | null = null;
   private _lastRefresh: Date | null = null;
-
-  // Auto-refresh interval handle
-  private _refreshTimer: NodeJS.Timer | undefined;
+  private _refreshTimer: ReturnType<typeof setInterval> | undefined;
 
   constructor() {
-    // Auto-refresh every 30 seconds when panel is visible
+    // Auto-refresh every 30 seconds
     this._refreshTimer = setInterval(() => {
       this.refresh();
     }, 30_000);
   }
 
   dispose() {
-    if (this._refreshTimer) {
-      clearInterval(this._refreshTimer as NodeJS.Timeout);
-    }
+    if (this._refreshTimer) clearInterval(this._refreshTimer);
     this._onDidChangeTreeData.dispose();
   }
 
-  /** Force a refresh from the backend */
   refresh(): void {
+    this._lastRefresh = null; // force re-fetch
     this._onDidChangeTreeData.fire(undefined);
   }
 
-  /** Called by VS Code to get root items or children */
   getTreeItem(element: vscode.TreeItem): vscode.TreeItem {
     return element;
   }
 
   async getChildren(element?: vscode.TreeItem): Promise<vscode.TreeItem[]> {
-    if (element) return []; // flat list, no nesting
+    if (element) return [];
 
     if (!isConfigured()) {
-      return [
-        new MessageItem('Not configured — click ⚙ Setup', 'warning'),
-      ];
+      return [new MessageItem('Not configured — click ⚙ Setup', 'warning')];
     }
 
     await this._fetchStagedFiles();
@@ -127,22 +142,26 @@ export class StagedFilesProvider implements vscode.TreeDataProvider<vscode.TreeI
     );
   }
 
-  /** Get current staged count for status bar */
   get stagedCount(): number {
     return this._stagedFiles.length;
   }
 
-  /** Remove a file from local list immediately (optimistic update) */
+  get stagedFiles(): StagedFile[] {
+    return [...this._stagedFiles];
+  }
+
   removeFile(fileId: string): void {
     this._stagedFiles = this._stagedFiles.filter((f) => f.id !== fileId);
     this._onDidChangeTreeData.fire(undefined);
   }
 
-  /** Add/update a file in the local list (called after a save sync) */
+  clearAll(): void {
+    this._stagedFiles = [];
+    this._onDidChangeTreeData.fire(undefined);
+  }
+
   upsertFile(file: StagedFile): void {
-    const idx = this._stagedFiles.findIndex(
-      (f) => f.filepath === file.filepath,
-    );
+    const idx = this._stagedFiles.findIndex((f) => f.filepath === file.filepath);
     if (idx >= 0) {
       this._stagedFiles[idx] = file;
     } else {
@@ -157,11 +176,8 @@ export class StagedFilesProvider implements vscode.TreeDataProvider<vscode.TreeI
     const config = getConfig();
     if (!config) return;
 
-    // Skip if fetched within last 5 seconds (avoid hammering)
-    if (
-      this._lastRefresh &&
-      Date.now() - this._lastRefresh.getTime() < 5_000
-    ) {
+    // Debounce: skip if fetched within 3s
+    if (this._lastRefresh && Date.now() - this._lastRefresh.getTime() < 3_000) {
       return;
     }
 
@@ -187,6 +203,148 @@ export class StagedFilesProvider implements vscode.TreeDataProvider<vscode.TreeI
     } finally {
       this._loading = false;
     }
+  }
+}
+
+// ── Diff View Helpers ─────────────────────────────────────────────────────────
+
+/**
+ * Show an inline VS Code diff for a staged file.
+ * Left = current local disk version, Right = staged (what will be committed).
+ */
+export async function showStagedDiff(
+  file: StagedFile,
+  context: vscode.ExtensionContext,
+): Promise<void> {
+  const workspaceFolders = vscode.workspace.workspaceFolders;
+  if (!workspaceFolders) {
+    vscode.window.showWarningMessage('No workspace open.');
+    return;
+  }
+
+  const workspaceRoot = workspaceFolders[0].uri.fsPath;
+  const localPath = path.join(workspaceRoot, file.filepath);
+
+  if (file.change_type === 'delete') {
+    // Deleted file — show a message, nothing to diff
+    vscode.window.showInformationMessage(
+      `🗑️ "${file.filepath}" is staged for deletion. It will be removed from GitHub on commit.`,
+      'OK'
+    );
+    return;
+  }
+
+  // Read current local file content
+  let localContent = '';
+  try {
+    if (fs.existsSync(localPath)) {
+      localContent = fs.readFileSync(localPath, 'utf8');
+    }
+  } catch {
+    localContent = '';
+  }
+
+  // For new files: "before" is empty
+  // For modifications: "before" is the current local file (what exists now)
+  // "after" = the staged diff applied to the before content
+  let stagedContent = localContent; // fallback: same as local (no diff available)
+
+  if (file.diff) {
+    // Apply the staged diff to reconstruct what will be committed
+    try {
+      stagedContent = applyUnifiedDiff(
+        file.change_type === 'create' ? '' : localContent,
+        file.diff
+      );
+    } catch {
+      // If diff apply fails, show the raw diff text
+      stagedContent = file.diff;
+    }
+  }
+
+  // Create virtual documents for diff view
+  const scheme = 'gitphone-staged';
+  const beforeLabel = file.change_type === 'create' ? '(new file)' : file.filepath;
+  const afterLabel = `${file.filepath} (staged)`;
+
+  // Register a simple content provider
+  const provider = vscode.workspace.registerTextDocumentContentProvider(scheme, {
+    provideTextDocumentContent(uri: vscode.Uri): string {
+      const which = uri.query;
+      return which === 'before'
+        ? (file.change_type === 'create' ? '' : localContent)
+        : stagedContent;
+    },
+  });
+
+  const beforeUri = vscode.Uri.parse(`${scheme}:${encodeURIComponent(beforeLabel)}?before`);
+  const afterUri  = vscode.Uri.parse(`${scheme}:${encodeURIComponent(afterLabel)}?after`);
+
+  try {
+    const changeIcon = file.change_type === 'create' ? '➕' : '✏️';
+    await vscode.commands.executeCommand(
+      'vscode.diff',
+      beforeUri,
+      afterUri,
+      `${changeIcon} GitPhone: ${path.basename(file.filepath)}`,
+      { preview: true },
+    );
+  } finally {
+    // Dispose the provider after a short delay
+    setTimeout(() => provider.dispose(), 5000);
+  }
+}
+
+/**
+ * Minimal unified diff applier — handles simple +/- line diffs.
+ * Falls back gracefully if the diff is malformed.
+ */
+function applyUnifiedDiff(original: string, diff: string): string {
+  try {
+    const origLines = original.split('\n');
+    const result: string[] = [];
+    let origIdx = 0;
+
+    const diffLines = diff.split('\n');
+    let i = 0;
+
+    // Skip header lines (---, +++, @@...@@)
+    while (i < diffLines.length && !diffLines[i].startsWith('@@')) i++;
+
+    for (; i < diffLines.length; i++) {
+      const line = diffLines[i];
+      if (line.startsWith('@@')) {
+        // Parse hunk header: @@ -a,b +c,d @@
+        const match = line.match(/@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/);
+        if (match) {
+          const oldStart = parseInt(match[1]) - 1;
+          // Copy unchanged lines up to this hunk
+          while (origIdx < oldStart) {
+            result.push(origLines[origIdx++]);
+          }
+        }
+      } else if (line.startsWith('-')) {
+        // Remove line from original
+        origIdx++;
+      } else if (line.startsWith('+')) {
+        // Add new line
+        result.push(line.slice(1));
+      } else if (line.startsWith(' ') || line === '') {
+        // Context line — keep from original
+        if (origIdx < origLines.length) {
+          result.push(origLines[origIdx++]);
+        }
+      }
+    }
+
+    // Append remaining original lines
+    while (origIdx < origLines.length) {
+      result.push(origLines[origIdx++]);
+    }
+
+    return result.join('\n');
+  } catch {
+    return original; // fallback
   }
 }
 

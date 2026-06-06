@@ -16,6 +16,8 @@ export interface SyncFilePayload {
   base_sha: string;
   is_binary: boolean;
   file_size: number;
+  active_repo?: string;    // Auto-detected from .git/config
+  active_branch?: string;  // Auto-detected from .git/HEAD
 }
 
 export interface RegisterResponse {

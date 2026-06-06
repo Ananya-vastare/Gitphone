@@ -13,14 +13,27 @@ from telegram.ext import Application
 from bot import (
     build_start_conversation,
     build_files_conversation,
+    build_auth_conversation,
+    build_branch_conversation,
     log_handler,
     status_handler,
     help_handler,
     cancel_handler,
+    repo_handler,
+    preview_handler,
+    unstage_handler,
+    clear_handler,
+    clear_confirm_callback,
+    admin_ban_handler,
+    admin_unban_handler,
+    admin_users_handler,
+    admin_broadcast_handler,
+    admin_stats_handler,
+    admin_revoke_handler,
 )
 from admin import register_admin_handlers
 from channel_logger import init_logger, log_startup, log_shutdown
-from telegram.ext import CommandHandler
+from telegram.ext import CommandHandler, CallbackQueryHandler
 
 # ── Build Telegram Application ────────────────────────────────────────────────
 telegram_app = (
@@ -29,18 +42,36 @@ telegram_app = (
     .build()
 )
 
-# Register conversation handlers (order matters — conversations first)
+# Conversation handlers (order matters — most specific first)
 telegram_app.add_handler(build_start_conversation())
 telegram_app.add_handler(build_files_conversation())
+telegram_app.add_handler(build_auth_conversation())
+telegram_app.add_handler(build_branch_conversation())
 
-# Standalone command handlers
+# Standalone user commands
 telegram_app.add_handler(CommandHandler("log", log_handler))
 telegram_app.add_handler(CommandHandler("status", status_handler))
 telegram_app.add_handler(CommandHandler("help", help_handler))
 telegram_app.add_handler(CommandHandler("cancel", cancel_handler))
+telegram_app.add_handler(CommandHandler("repo", repo_handler))
+telegram_app.add_handler(CommandHandler("preview", preview_handler))
+telegram_app.add_handler(CommandHandler("unstage", unstage_handler))
+telegram_app.add_handler(CommandHandler("clear", clear_handler))
 
-# Admin-only handlers (guarded by ADMIN_TELEGRAM_IDS env var)
+# Inline button callbacks for /clear
+telegram_app.add_handler(CallbackQueryHandler(clear_confirm_callback, pattern=r"^CLEAR_CONFIRM$"))
+
+# Admin commands
+telegram_app.add_handler(CommandHandler("ban", admin_ban_handler))
+telegram_app.add_handler(CommandHandler("unban", admin_unban_handler))
+telegram_app.add_handler(CommandHandler("users", admin_users_handler))
+telegram_app.add_handler(CommandHandler("broadcast", admin_broadcast_handler))
+telegram_app.add_handler(CommandHandler("stats", admin_stats_handler))
+telegram_app.add_handler(CommandHandler("revoke", admin_revoke_handler))
+
+# Legacy admin handlers from admin.py (kept for backward compat)
 register_admin_handlers(telegram_app)
+
 
 
 # ── FastAPI Lifespan ──────────────────────────────────────────────────────────

@@ -13,6 +13,8 @@ class SyncFilePayload(BaseModel):
     base_sha: str = Field(..., description="Git SHA diff was computed against, or 'new_file'")
     is_binary: bool = Field(default=False)
     file_size: int = Field(default=0, description="File size in bytes")
+    active_repo: Optional[str] = Field(None, description="Auto-detected GitHub repo (owner/name) from VS Code workspace")
+    active_branch: Optional[str] = Field(None, description="Auto-detected git branch from VS Code workspace")
 
     @validator("file_size")
     def check_size_limit(cls, v):

@@ -169,3 +169,169 @@ def get_recent_commits(telegram_id: str, limit: int = 10) -> list[dict]:
     except Exception as e:
         print(f"[supabase] get_recent_commits error: {e}")
         return []
+
+
+# ── Active Repo Tracking ─────────────────────────────────────────────────────
+
+def update_active_repo(telegram_id: str, active_repo: str, active_branch: str) -> None:
+    """Update the user's currently active repo/branch (auto-detected from VS Code)."""
+    try:
+        get_client().table("users") \
+            .update({"active_repo": active_repo, "active_branch": active_branch}) \
+            .eq("telegram_id", telegram_id) \
+            .execute()
+    except Exception as e:
+        print(f"[supabase] update_active_repo error: {e}")
+
+
+def update_branch(telegram_id: str, branch: str) -> None:
+    """Update a user's active branch manually (from /branch command)."""
+    try:
+        get_client().table("users") \
+            .update({"active_branch": branch, "branch": branch}) \
+            .eq("telegram_id", telegram_id) \
+            .execute()
+    except Exception as e:
+        print(f"[supabase] update_branch error: {e}")
+
+
+def get_pending_files_by_repo(telegram_id: str) -> dict[str, list[dict]]:
+    """
+    Returns pending staged files grouped by repo.
+    { "owner/repo": [file, file], "other/repo": [file] }
+    Files with no repo go under the user's active_repo or default_repo.
+    """
+    try:
+        user = get_user_by_telegram_id(telegram_id)
+        fallback_repo = (user or {}).get("active_repo") or (user or {}).get("default_repo", "unknown")
+
+        result = get_client().table("staged_files") \
+            .select("*") \
+            .eq("telegram_id", telegram_id) \
+            .eq("status", "pending") \
+            .order("staged_at", desc=False) \
+            .execute()
+
+        files = result.data or []
+        grouped: dict[str, list[dict]] = {}
+        for f in files:
+            repo = f.get("repo") or fallback_repo
+            grouped.setdefault(repo, []).append(f)
+        return grouped
+    except Exception as e:
+        print(f"[supabase] get_pending_files_by_repo error: {e}")
+        return {}
+
+
+def unstage_file_by_path(telegram_id: str, filepath: str) -> bool:
+    """Remove a specific pending staged file by filepath. Returns True if found."""
+    try:
+        db = get_client()
+        result = db.table("staged_files") \
+            .select("id") \
+            .eq("telegram_id", telegram_id) \
+            .eq("filepath", filepath) \
+            .eq("status", "pending") \
+            .execute()
+        if not result.data:
+            return False
+        for row in result.data:
+            db.table("staged_files").update({"status": "cancelled"}).eq("id", row["id"]).execute()
+        return True
+    except Exception as e:
+        print(f"[supabase] unstage_file_by_path error: {e}")
+        return False
+
+
+def clear_all_staged(telegram_id: str) -> int:
+    """Cancel all pending staged files for a user. Returns count cleared."""
+    try:
+        db = get_client()
+        result = db.table("staged_files") \
+            .select("id") \
+            .eq("telegram_id", telegram_id) \
+            .eq("status", "pending") \
+            .execute()
+        count = len(result.data or [])
+        if count:
+            ids = [r["id"] for r in result.data]
+            db.table("staged_files").update({"status": "cancelled"}).in_("id", ids).execute()
+        return count
+    except Exception as e:
+        print(f"[supabase] clear_all_staged error: {e}")
+        return 0
+
+
+# ── Admin Operations ─────────────────────────────────────────────────────────
+
+def ban_user(telegram_id: str, reason: str = "") -> bool:
+    """Ban a user by telegram_id. Returns True if user existed."""
+    try:
+        result = get_client().table("users") \
+            .update({"status": "banned", "ban_reason": reason}) \
+            .eq("telegram_id", telegram_id) \
+            .execute()
+        return bool(result.data)
+    except Exception as e:
+        print(f"[supabase] ban_user error: {e}")
+        return False
+
+
+def unban_user(telegram_id: str) -> bool:
+    """Restore a banned user. Returns True if user existed."""
+    try:
+        result = get_client().table("users") \
+            .update({"status": "active", "ban_reason": None}) \
+            .eq("telegram_id", telegram_id) \
+            .execute()
+        return bool(result.data)
+    except Exception as e:
+        print(f"[supabase] unban_user error: {e}")
+        return False
+
+
+def revoke_api_key(telegram_id: str) -> bool:
+    """Clear the API key hash forcing user to re-connect the extension."""
+    try:
+        result = get_client().table("users") \
+            .update({"api_key_hash": None}) \
+            .eq("telegram_id", telegram_id) \
+            .execute()
+        return bool(result.data)
+    except Exception as e:
+        print(f"[supabase] revoke_api_key error: {e}")
+        return False
+
+
+def get_all_users(limit: int = 50, offset: int = 0) -> list[dict]:
+    """Returns paginated list of all users (admin only)."""
+    try:
+        result = get_client().table("users") \
+            .select("telegram_id, default_repo, active_repo, branch, status, last_active, created_at") \
+            .order("last_active", desc=True) \
+            .range(offset, offset + limit - 1) \
+            .execute()
+        return result.data or []
+    except Exception as e:
+        print(f"[supabase] get_all_users error: {e}")
+        return []
+
+
+def count_stats() -> dict:
+    """Returns global platform statistics."""
+    try:
+        db = get_client()
+        users = db.table("users").select("id, status", count="exact").execute()
+        staged = db.table("staged_files").select("id, status", count="exact").eq("status", "pending").execute()
+        commits = db.table("commit_log").select("id", count="exact").execute()
+        banned = sum(1 for u in (users.data or []) if u.get("status") == "banned")
+        return {
+            "total_users": users.count or 0,
+            "banned_users": banned,
+            "pending_files": staged.count or 0,
+            "total_commits": commits.count or 0,
+        }
+    except Exception as e:
+        print(f"[supabase] count_stats error: {e}")
+        return {}
+

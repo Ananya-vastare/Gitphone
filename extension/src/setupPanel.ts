@@ -1,6 +1,7 @@
-/**
- * setupPanel.ts — VS Code Webview panel for first-time GitPhone configuration.
- * Opens as a tab in the editor. Collects 5 fields and POSTs to /register.
+﻿/**
+ * setupPanel.ts â€” GitPhone first-time setup.
+ * Uses VS Code's built-in GitHub OAuth â€” no manual PAT needed.
+ * Falls back to manual PAT entry via Advanced section.
  */
 
 import * as vscode from 'vscode';
@@ -41,24 +42,27 @@ export class SetupPanel {
     this._panel = panel;
     this._panel.webview.html = this._getHtmlContent();
 
-    // Listen for messages from the webview
     this._panel.webview.onDidReceiveMessage(
       async (message) => {
         if (message.type === 'ready') {
-          // Webview signals it's loaded — NOW safe to prefill
+          // Prefill saved config
           const existing = getConfig();
           if (existing) {
             this._panel.webview.postMessage({
               type: 'prefill',
               data: {
                 telegramId: existing.telegramId,
-                githubToken: existing.githubToken,   // ← was missing!
+                githubToken: existing.githubToken,
                 defaultRepo: existing.defaultRepo,
                 branch: existing.branch,
                 backendUrl: existing.backendUrl,
+                isOAuth: !existing.githubToken.startsWith('ghp_') && !existing.githubToken.startsWith('github_pat_'),
               },
             });
           }
+        } else if (message.type === 'github_oauth') {
+          // Use VS Code's built-in GitHub OAuth
+          await this._handleGitHubOAuth();
         } else if (message.type === 'connect') {
           await this._handleConnect(message.data);
         } else if (message.type === 'openLink') {
@@ -70,6 +74,43 @@ export class SetupPanel {
     );
 
     this._panel.onDidDispose(() => this.dispose(), null, this._disposables);
+  }
+
+  /** Use VS Code's built-in GitHub OAuth to get a token */
+  private async _handleGitHubOAuth(): Promise<void> {
+    try {
+      this._panel.webview.postMessage({ type: 'oauth_loading' });
+
+      // VS Code built-in GitHub auth â€” user clicks "Sign in with GitHub" in browser
+      const session = await vscode.authentication.getSession(
+        'github',
+        ['repo', 'read:user'],   // repo = read/write access to repos
+        { createIfNone: true },
+      );
+
+      if (!session) {
+        this._panel.webview.postMessage({
+          type: 'oauth_error',
+          message: 'GitHub sign-in was cancelled.',
+        });
+        return;
+      }
+
+      const token = session.accessToken;
+      const username = session.account.label;
+
+      this._panel.webview.postMessage({
+        type: 'oauth_success',
+        token,
+        username,
+      });
+
+    } catch (err: any) {
+      this._panel.webview.postMessage({
+        type: 'oauth_error',
+        message: err?.message ?? 'GitHub sign-in failed.',
+      });
+    }
   }
 
   private async _handleConnect(data: {
@@ -98,7 +139,7 @@ export class SetupPanel {
           return;
         }
 
-        // Save config to globalState — including the api_key
+        // Save config to globalState â€” including the api_key
         saveConfig({
           telegramId: data.telegramId,
           githubToken: data.githubToken,
@@ -116,7 +157,7 @@ export class SetupPanel {
         setTimeout(() => {
           this._panel.dispose();
           vscode.window.showInformationMessage(
-            '🚀 GitPhone connected! Save any file in your workspace to stage it.',
+            'ðŸš€ GitPhone connected! Save any file in your workspace to stage it.',
           );
         }, 1500);
       } else {
@@ -147,11 +188,6 @@ export class SetupPanel {
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>GitPhone Setup</title>
   <style>
-    :root {
-      --radius: 8px;
-      --gap: 16px;
-    }
-
     * { box-sizing: border-box; margin: 0; padding: 0; }
 
     body {
@@ -160,46 +196,86 @@ export class SetupPanel {
       color: var(--vscode-foreground);
       background: var(--vscode-editor-background);
       padding: 32px;
-      max-width: 560px;
+      max-width: 540px;
       margin: 0 auto;
     }
 
     .header {
       display: flex;
       align-items: center;
-      gap: 12px;
+      gap: 14px;
       margin-bottom: 28px;
     }
-
-    .logo {
-      font-size: 32px;
-    }
-
-    h1 {
-      font-size: 22px;
-      font-weight: 600;
-      color: var(--vscode-foreground);
-    }
-
-    .subtitle {
-      font-size: 13px;
-      color: var(--vscode-descriptionForeground);
-      margin-top: 2px;
-    }
+    .logo { font-size: 36px; }
+    h1 { font-size: 22px; font-weight: 600; }
+    .subtitle { font-size: 13px; color: var(--vscode-descriptionForeground); margin-top: 3px; }
 
     .divider {
       height: 1px;
       background: var(--vscode-widget-border);
-      margin: 20px 0;
+      margin: 22px 0;
     }
 
-    .field {
-      margin-bottom: 18px;
+    /* â”€â”€ GitHub OAuth button â”€â”€ */
+    .btn-github {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      width: 100%;
+      padding: 12px 20px;
+      background: #238636;
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.15s, transform 0.1s;
+      margin-bottom: 8px;
     }
+    .btn-github:hover { background: #2ea043; transform: translateY(-1px); }
+    .btn-github:active { transform: translateY(0); }
+    .btn-github:disabled { opacity: 0.6; cursor: not-allowed; transform: none; }
+    .btn-github svg { flex-shrink: 0; }
+
+    /* â”€â”€ Connected GitHub badge â”€â”€ */
+    .github-connected {
+      display: none;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 14px;
+      background: rgba(35,134,54,0.15);
+      border: 1px solid rgba(35,134,54,0.4);
+      border-radius: 8px;
+      margin-bottom: 8px;
+    }
+    .github-connected.show { display: flex; }
+    .github-avatar {
+      width: 28px; height: 28px;
+      border-radius: 50%;
+      background: #238636;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 14px; color: #fff; font-weight: 700;
+      flex-shrink: 0;
+    }
+    .github-name { font-weight: 600; font-size: 13px; }
+    .github-status { font-size: 11px; color: var(--vscode-descriptionForeground); }
+    .change-account {
+      margin-left: auto;
+      font-size: 11px;
+      color: var(--vscode-textLink-foreground);
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .change-account:hover { text-decoration: underline; }
+
+    /* â”€â”€ Fields â”€â”€ */
+    .field { margin-bottom: 16px; }
 
     label {
       display: block;
-      font-size: 12px;
+      font-size: 11px;
       font-weight: 600;
       text-transform: uppercase;
       letter-spacing: 0.5px;
@@ -213,34 +289,23 @@ export class SetupPanel {
       background: var(--vscode-input-background);
       color: var(--vscode-input-foreground);
       border: 1px solid var(--vscode-input-border, var(--vscode-widget-border));
-      border-radius: var(--radius);
+      border-radius: 8px;
       font-size: 13px;
       font-family: var(--vscode-editor-font-family);
       outline: none;
       transition: border-color 0.15s;
     }
+    input:focus { border-color: var(--vscode-focusBorder); }
+    input::placeholder { color: var(--vscode-input-placeholderForeground); }
 
-    input:focus {
-      border-color: var(--vscode-focusBorder);
-    }
-
-    input::placeholder {
-      color: var(--vscode-input-placeholderForeground);
-    }
-
-    .hint {
-      font-size: 11px;
-      color: var(--vscode-descriptionForeground);
-      margin-top: 4px;
-    }
-
-    .hint a {
-      color: var(--vscode-textLink-foreground);
-      text-decoration: none;
-    }
-
+    .hint { font-size: 11px; color: var(--vscode-descriptionForeground); margin-top: 4px; }
+    .hint a { color: var(--vscode-textLink-foreground); text-decoration: none; }
     .hint a:hover { text-decoration: underline; }
 
+    .field-row { display: flex; gap: 12px; }
+    .field-row .field { flex: 1; }
+
+    /* â”€â”€ Connect button â”€â”€ */
     .btn-primary {
       display: block;
       width: 100%;
@@ -248,97 +313,85 @@ export class SetupPanel {
       background: var(--vscode-button-background);
       color: var(--vscode-button-foreground);
       border: none;
-      border-radius: var(--radius);
+      border-radius: 8px;
       font-size: 14px;
       font-weight: 600;
       cursor: pointer;
-      margin-top: 24px;
+      margin-top: 20px;
       transition: background 0.15s, opacity 0.15s;
     }
+    .btn-primary:hover { background: var(--vscode-button-hoverBackground); }
+    .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
 
-    .btn-primary:hover {
-      background: var(--vscode-button-hoverBackground);
-    }
-
-    .btn-primary:disabled {
-      opacity: 0.5;
-      cursor: not-allowed;
-    }
-
+    /* â”€â”€ Status box â”€â”€ */
     .status-box {
       display: none;
-      padding: 12px 16px;
-      border-radius: var(--radius);
+      padding: 10px 14px;
+      border-radius: 8px;
       font-size: 13px;
-      margin-top: 16px;
+      margin-top: 14px;
       align-items: center;
       gap: 10px;
     }
-
     .status-box.loading {
       display: flex;
       background: var(--vscode-inputValidation-infoBackground);
       border: 1px solid var(--vscode-inputValidation-infoBorder);
-      color: var(--vscode-inputValidation-infoForeground, var(--vscode-foreground));
     }
-
     .status-box.error {
       display: flex;
       background: var(--vscode-inputValidation-errorBackground);
       border: 1px solid var(--vscode-inputValidation-errorBorder);
-      color: var(--vscode-inputValidation-errorForeground, var(--vscode-foreground));
     }
-
     .status-box.success {
       display: flex;
-      background: var(--vscode-inputValidation-infoBackground);
-      border: 1px solid var(--vscode-inputValidation-infoBorder);
+      background: rgba(35,134,54,0.15);
+      border: 1px solid rgba(35,134,54,0.4);
     }
 
     .spinner {
-      width: 14px;
-      height: 14px;
+      width: 14px; height: 14px;
       border: 2px solid currentColor;
       border-top-color: transparent;
       border-radius: 50%;
       animation: spin 0.6s linear infinite;
       flex-shrink: 0;
     }
+    @keyframes spin { to { transform: rotate(360deg); } }
 
-    @keyframes spin {
-      to { transform: rotate(360deg); }
-    }
-
+    /* â”€â”€ Advanced (manual PAT) â”€â”€ */
     .advanced-toggle {
-      font-size: 12px;
+      font-size: 11px;
       color: var(--vscode-textLink-foreground);
       cursor: pointer;
-      margin-top: 8px;
-      display: inline-block;
+      margin-top: 6px;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
     }
-
     .advanced-toggle:hover { text-decoration: underline; }
-
-    .advanced-section {
-      display: none;
-      margin-top: 12px;
-    }
-
+    .advanced-section { display: none; margin-top: 14px; }
     .advanced-section.open { display: block; }
 
-    .field-row {
+    .or-divider {
       display: flex;
-      gap: 12px;
+      align-items: center;
+      gap: 10px;
+      margin: 16px 0 10px;
+      color: var(--vscode-descriptionForeground);
+      font-size: 11px;
     }
-
-    .field-row .field {
+    .or-divider::before, .or-divider::after {
+      content: '';
       flex: 1;
+      height: 1px;
+      background: var(--vscode-widget-border);
     }
   </style>
 </head>
 <body>
   <div class="header">
-    <span class="logo">📱</span>
+    <span class="logo">ðŸ“±</span>
     <div>
       <h1>GitPhone Setup</h1>
       <div class="subtitle">Commit to GitHub from anywhere via Telegram</div>
@@ -348,24 +401,34 @@ export class SetupPanel {
   <div class="divider"></div>
 
   <form id="setupForm">
+
+    <!-- â”€â”€ Step 1: GitHub Auth â”€â”€ -->
     <div class="field">
-      <label>GitHub Fine-Grained PAT <span style="color:var(--vscode-errorForeground)">*</span></label>
-      <input
-        type="password"
-        id="githubToken"
-        placeholder="ghp_xxxxxxxxxxxx or github_pat_..."
-        autocomplete="off"
-        spellcheck="false"
-        required
-      />
-      <div class="hint">
-        <a href="#" onclick="openLink('https://github.com/settings/tokens?type=beta')">
-          Settings → Developer Settings → Fine-grained tokens
-        </a>
-        — needs <strong>Contents: read &amp; write</strong>
+      <label>GitHub Account <span style="color:var(--vscode-errorForeground)">*</span></label>
+
+      <!-- OAuth button (shown when not signed in) -->
+      <button type="button" class="btn-github" id="githubOAuthBtn" onclick="signInWithGitHub()">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="white">
+          <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0 0 24 12c0-6.63-5.37-12-12-12z"/>
+        </svg>
+        Sign in with GitHub
+      </button>
+
+      <!-- Connected state (shown after OAuth) -->
+      <div class="github-connected" id="githubConnected">
+        <div class="github-avatar" id="githubAvatar">G</div>
+        <div>
+          <div class="github-name" id="githubUsername">â€”</div>
+          <div class="github-status">âœ… Connected via GitHub</div>
+        </div>
+        <span class="change-account" onclick="resetGitHubAuth()">Change account</span>
       </div>
+
+      <!-- Hidden: stores the actual token -->
+      <input type="hidden" id="githubToken" />
     </div>
 
+    <!-- â”€â”€ Step 2: Telegram ID â”€â”€ -->
     <div class="field">
       <label>Telegram User ID <span style="color:var(--vscode-errorForeground)">*</span></label>
       <input
@@ -379,6 +442,7 @@ export class SetupPanel {
       <div class="hint">Message <strong>@userinfobot</strong> on Telegram to get your numeric ID</div>
     </div>
 
+    <!-- â”€â”€ Step 3: Repo + Branch â”€â”€ -->
     <div class="field-row">
       <div class="field">
         <label>Default Repository <span style="color:var(--vscode-errorForeground)">*</span></label>
@@ -404,8 +468,28 @@ export class SetupPanel {
       </div>
     </div>
 
-    <span class="advanced-toggle" onclick="toggleAdvanced()">⚙️ Advanced options</span>
+    <!-- â”€â”€ Advanced (manual PAT fallback) â”€â”€ -->
+    <div class="or-divider">or use a Personal Access Token</div>
+    <span class="advanced-toggle" onclick="toggleAdvanced()">
+      âš™ï¸ Advanced options
+    </span>
     <div class="advanced-section" id="advancedSection">
+      <div class="field" style="margin-top:12px">
+        <label>GitHub PAT (manual)</label>
+        <input
+          type="password"
+          id="githubTokenManual"
+          placeholder="ghp_xxxxxxxxxxxx or github_pat_..."
+          autocomplete="off"
+          spellcheck="false"
+        />
+        <div class="hint">
+          <a href="#" onclick="openLink('https://github.com/settings/tokens?type=beta')">
+            Settings â†’ Developer Settings â†’ Fine-grained tokens
+          </a>
+          â€” needs <strong>Contents: read &amp; write</strong>
+        </div>
+      </div>
       <div class="field">
         <label>Backend URL</label>
         <input
@@ -426,14 +510,14 @@ export class SetupPanel {
     </div>
 
     <button type="submit" class="btn-primary" id="connectBtn">
-      🚀 Connect GitPhone
+      ðŸš€ Connect GitPhone
     </button>
   </form>
 
   <script>
     const vscode = acquireVsCodeApi();
 
-    // Signal extension that webview is ready to receive messages
+    // Signal extension that webview is ready
     vscode.postMessage({ type: 'ready' });
 
     function openLink(url) {
@@ -441,36 +525,59 @@ export class SetupPanel {
     }
 
     function toggleAdvanced() {
-      const section = document.getElementById('advancedSection');
-      section.classList.toggle('open');
+      document.getElementById('advancedSection').classList.toggle('open');
     }
 
     function showStatus(type, message) {
       const box = document.getElementById('statusBox');
-      const text = document.getElementById('statusText');
-      const spinner = document.getElementById('statusSpinner');
-
       box.className = 'status-box ' + type;
-      text.textContent = message;
-      spinner.style.display = type === 'loading' ? 'block' : 'none';
+      document.getElementById('statusText').textContent = message;
+      document.getElementById('statusSpinner').style.display = type === 'loading' ? 'block' : 'none';
     }
 
     function hideStatus() {
       document.getElementById('statusBox').className = 'status-box';
     }
 
+    // â”€â”€ GitHub OAuth â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    function signInWithGitHub() {
+      document.getElementById('githubOAuthBtn').disabled = true;
+      document.getElementById('githubOAuthBtn').textContent = 'Opening GitHubâ€¦';
+      vscode.postMessage({ type: 'github_oauth' });
+    }
+
+    function resetGitHubAuth() {
+      document.getElementById('githubToken').value = '';
+      document.getElementById('githubConnected').classList.remove('show');
+      document.getElementById('githubOAuthBtn').style.display = 'flex';
+      document.getElementById('githubOAuthBtn').disabled = false;
+      document.getElementById('githubOAuthBtn').innerHTML = \`
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="white">
+          <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0 0 24 12c0-6.63-5.37-12-12-12z"/>
+        </svg>
+        Sign in with GitHub\`;
+    }
+
+    // â”€â”€ Form submit â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     document.getElementById('setupForm').addEventListener('submit', (e) => {
       e.preventDefault();
 
-      const githubToken = document.getElementById('githubToken').value.trim();
+      // Prefer OAuth token, fall back to manual PAT
+      const oauthToken = document.getElementById('githubToken').value.trim();
+      const manualToken = document.getElementById('githubTokenManual').value.trim();
+      const githubToken = oauthToken || manualToken;
+
       const telegramId = document.getElementById('telegramId').value.trim();
       const defaultRepo = document.getElementById('defaultRepo').value.trim();
       const branch = document.getElementById('branch').value.trim() || 'main';
       const backendUrl = document.getElementById('backendUrl').value.trim() || 'https://gitphone.onrender.com';
 
-      // Basic client-side validation
-      if (!githubToken.startsWith('ghp_') && !githubToken.startsWith('github_pat_')) {
-        showStatus('error', 'Token must start with ghp_ or github_pat_');
+      if (!githubToken) {
+        showStatus('error', 'Sign in with GitHub or enter a PAT first.');
+        return;
+      }
+      if (manualToken && !manualToken.startsWith('ghp_') && !manualToken.startsWith('github_pat_')) {
+        showStatus('error', 'Manual token must start with ghp_ or github_pat_');
         return;
       }
       if (!/^\\d{6,12}$/.test(telegramId)) {
@@ -483,7 +590,7 @@ export class SetupPanel {
       }
 
       document.getElementById('connectBtn').disabled = true;
-      showStatus('loading', 'Connecting to GitPhone...');
+      showStatus('loading', 'Connecting to GitPhoneâ€¦');
 
       vscode.postMessage({
         type: 'connect',
@@ -491,27 +598,65 @@ export class SetupPanel {
       });
     });
 
-    // Handle messages from extension
+    // â”€â”€ Messages from extension â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     window.addEventListener('message', (event) => {
       const msg = event.data;
-      if (msg.type === 'loading') {
+
+      if (msg.type === 'oauth_loading') {
+        // Already handled by button state
+
+      } else if (msg.type === 'oauth_success') {
+        // GitHub signed in â€” show connected state
+        document.getElementById('githubToken').value = msg.token;
+        document.getElementById('githubUsername').textContent = msg.username;
+        document.getElementById('githubAvatar').textContent = msg.username[0].toUpperCase();
+        document.getElementById('githubConnected').classList.add('show');
+        document.getElementById('githubOAuthBtn').style.display = 'none';
+
+        // Auto-fill repo if empty
+        const repoInput = document.getElementById('defaultRepo');
+        if (!repoInput.value) {
+          repoInput.value = msg.username + '/';
+          repoInput.focus();
+          repoInput.setSelectionRange(repoInput.value.length, repoInput.value.length);
+        }
+
+      } else if (msg.type === 'oauth_error') {
+        document.getElementById('githubOAuthBtn').disabled = false;
+        document.getElementById('githubOAuthBtn').textContent = 'Sign in with GitHub';
+        showStatus('error', msg.message);
+
+      } else if (msg.type === 'loading') {
         showStatus('loading', msg.message);
+
       } else if (msg.type === 'error') {
         showStatus('error', msg.message);
         document.getElementById('connectBtn').disabled = false;
+
       } else if (msg.type === 'success') {
-        showStatus('success', '✅ Connected! GitPhone is now active.');
+        showStatus('success', 'âœ… Connected! GitPhone is now active.');
+
       } else if (msg.type === 'prefill') {
         const d = msg.data;
         if (d.telegramId) document.getElementById('telegramId').value = d.telegramId;
         if (d.defaultRepo) document.getElementById('defaultRepo').value = d.defaultRepo;
         if (d.branch) document.getElementById('branch').value = d.branch;
         if (d.backendUrl) document.getElementById('backendUrl').value = d.backendUrl;
+
         if (d.githubToken) {
-          // Show token as filled but masked — user can clear and retype if needed
-          const tokenInput = document.getElementById('githubToken');
-          tokenInput.value = d.githubToken;
-          tokenInput.placeholder = '•••••••• (saved — clear to change)';
+          if (d.isOAuth) {
+            // Was signed in via OAuth â€” show connected state with placeholder name
+            document.getElementById('githubToken').value = d.githubToken;
+            document.getElementById('githubUsername').textContent = 'GitHub Account';
+            document.getElementById('githubAvatar').textContent = 'âœ“';
+            document.getElementById('githubConnected').classList.add('show');
+            document.getElementById('githubOAuthBtn').style.display = 'none';
+          } else {
+            // Was set via manual PAT
+            document.getElementById('githubTokenManual').value = d.githubToken;
+            document.getElementById('githubTokenManual').placeholder = 'â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢ (saved)';
+            document.getElementById('advancedSection').classList.add('open');
+          }
         }
       }
     });

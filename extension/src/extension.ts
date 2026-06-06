@@ -28,10 +28,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   context.subscriptions.push(treeView);
   context.subscriptions.push({ dispose: () => stagedFilesProvider.dispose() });
 
-  // Update tree view title with count
+  // Update tree view title + Activity Bar badge with staged count
   stagedFilesProvider.onDidChangeTreeData(() => {
     const count = stagedFilesProvider.stagedCount;
     treeView.title = count > 0 ? `Staged Files (${count})` : 'Staged Files';
+    // Badge on Activity Bar icon
+    treeView.badge = count > 0
+      ? { tooltip: `${count} file${count === 1 ? '' : 's'} staged`, value: count }
+      : undefined;
     setConnected(count);
   });
 

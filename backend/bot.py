@@ -1426,13 +1426,14 @@ async def admin_revoke_handler(update: Update, context: ContextTypes.DEFAULT_TYP
 # ── Conversation Handler Builders (exported to main.py) ───────────────────────
 
 def build_start_conversation() -> ConversationHandler:
+    """
+    /start no longer has a multi-step flow.
+    New users are directed to /auth (Device Flow) instead of entering a PAT.
+    No states needed — start_handler always returns ConversationHandler.END.
+    """
     return ConversationHandler(
         entry_points=[CommandHandler("start", start_handler)],
-        states={
-            WAITING_TOKEN: [MessageHandler(filters.TEXT & ~filters.COMMAND, waiting_token_handler)],
-            WAITING_REPO: [MessageHandler(filters.TEXT & ~filters.COMMAND, waiting_repo_handler)],
-            WAITING_BRANCH: [MessageHandler(filters.TEXT & ~filters.COMMAND, waiting_branch_handler)],
-        },
+        states={},
         fallbacks=[CommandHandler("cancel", cancel_handler)],
         allow_reentry=True,
     )

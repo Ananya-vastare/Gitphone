@@ -39,10 +39,29 @@
     "onStartupFinished"
   ],
   "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "gitphone-sidebar",
+          "title": "GitPhone",
+          "icon": "media/sidebar-icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "gitphone-sidebar": [
+        {
+          "id": "gitphone.stagedFiles",
+          "name": "Staged Files",
+          "when": "true"
+        }
+      ]
+    },
     "commands": [
       {
         "command": "gitphone.openSetup",
-        "title": "GitPhone: Open Setup"
+        "title": "GitPhone: Open Setup",
+        "icon": "$(gear)"
       },
       {
         "command": "gitphone.openPanel",
@@ -55,8 +74,49 @@
       {
         "command": "gitphone.checkStatus",
         "title": "GitPhone: Check Status"
+      },
+      {
+        "command": "gitphone.refreshStagedFiles",
+        "title": "Refresh",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "gitphone.unstageFile",
+        "title": "Unstage File",
+        "icon": "$(remove)"
+      },
+      {
+        "command": "gitphone.openStagedFile",
+        "title": "Open File",
+        "icon": "$(go-to-file)"
+      },
+      {
+        "command": "gitphone.stageCurrentFile",
+        "title": "GitPhone: Stage Current File Now",
+        "icon": "$(cloud-upload)"
       }
-    ]
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "gitphone.refreshStagedFiles",
+          "when": "view == gitphone.stagedFiles",
+          "group": "navigation@1"
+        },
+        {
+          "command": "gitphone.openSetup",
+          "when": "view == gitphone.stagedFiles",
+          "group": "navigation@2"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "gitphone.unstageFile",
+          "when": "viewItem == stagedFile",
+          "group": "inline"
+        }
+      ]
+    }
   },
   "scripts": {
     "vscode:prepublish": "npm run build",

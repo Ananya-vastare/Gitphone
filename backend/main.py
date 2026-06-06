@@ -88,10 +88,14 @@ async def telegram_webhook(request: Request):
 from routes.register import router as register_router
 from routes.sync import router as sync_router
 from routes.version import router as version_router
+from routes.staged_files import router as staged_files_router
+from routes.unstage import router as unstage_router
 
 app.include_router(register_router)
 app.include_router(sync_router)
 app.include_router(version_router)
+app.include_router(staged_files_router)
+app.include_router(unstage_router)
 
 
 # ── Health Check ─────────────────────────────────────────────────────────────

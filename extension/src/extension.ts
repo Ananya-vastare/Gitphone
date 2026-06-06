@@ -1,8 +1,3 @@
-/**
- * extension.ts — GitPhone VS Code Extension entry point.
- * Registers all commands, activates the file watcher, and manages lifecycle.
- */
-
 import * as vscode from 'vscode';
 import { initConfig, isConfigured, getConfig } from './config';
 import { initCache, clearAll as clearCache } from './localCache';
@@ -10,7 +5,11 @@ import { initStatusBar, setConnected, setDisconnected, dispose as disposeStatusB
 import { onFileSaved, resetStagedCount } from './fileWatcher';
 import { SetupPanel } from './setupPanel';
 import { getVersion, healthCheck } from './api';
+import { StagedFilesProvider, StagedFileItem } from './stagedFilesProvider';
+import axios from 'axios';
 
+// ── Global provider instance (shared between commands) ─────────────────────
+let stagedFilesProvider: StagedFilesProvider;
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   console.log('[GitPhone] Extension activating...');
@@ -20,21 +19,40 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   initCache(context);
   initStatusBar();
 
+  // ── Sidebar TreeView ──────────────────────────────────────────────────────
+  stagedFilesProvider = new StagedFilesProvider();
+  const treeView = vscode.window.createTreeView('gitphone.stagedFiles', {
+    treeDataProvider: stagedFilesProvider,
+    showCollapseAll: false,
+  });
+  context.subscriptions.push(treeView);
+  context.subscriptions.push({ dispose: () => stagedFilesProvider.dispose() });
+
+  // Update tree view title with count
+  stagedFilesProvider.onDidChangeTreeData(() => {
+    const count = stagedFilesProvider.stagedCount;
+    treeView.title = count > 0 ? `Staged Files (${count})` : 'Staged Files';
+    setConnected(count);
+  });
+
   // ── Register commands ─────────────────────────────────────────────────────
   context.subscriptions.push(
+
+    // Setup panel
     vscode.commands.registerCommand('gitphone.openSetup', () => {
       SetupPanel.createOrShow(context.extensionUri);
     }),
 
+    // Open panel / status menu
     vscode.commands.registerCommand('gitphone.openPanel', () => {
       if (isConfigured()) {
-        // Show quick-pick info menu when already configured
         showStatusMenu();
       } else {
         SetupPanel.createOrShow(context.extensionUri);
       }
     }),
 
+    // Clear cache
     vscode.commands.registerCommand('gitphone.clearCache', async () => {
       const confirm = await vscode.window.showWarningMessage(
         'Clear GitPhone local cache? This will reset all cached file SHAs.',
@@ -44,27 +62,92 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       if (confirm === 'Clear Cache') {
         clearCache();
         resetStagedCount(0);
+        stagedFilesProvider.refresh();
         vscode.window.showInformationMessage('GitPhone cache cleared.');
       }
     }),
 
+    // Check status
     vscode.commands.registerCommand('gitphone.checkStatus', () => {
       showStatusMenu();
+    }),
+
+    // ── Sidebar commands ──────────────────────────────────────────────────
+
+    // Refresh button in sidebar title bar
+    vscode.commands.registerCommand('gitphone.refreshStagedFiles', () => {
+      stagedFilesProvider.refresh();
+      vscode.window.setStatusBarMessage('$(sync~spin) GitPhone: Refreshing...', 2000);
+    }),
+
+    // Unstage a file (remove from staged)
+    vscode.commands.registerCommand('gitphone.unstageFile', async (item: StagedFileItem) => {
+      if (!item?.file) return;
+      const config = getConfig();
+      if (!config) return;
+
+      const confirm = await vscode.window.showWarningMessage(
+        `Unstage "${item.file.filepath}"?`,
+        'Unstage',
+        'Cancel',
+      );
+      if (confirm !== 'Unstage') return;
+
+      try {
+        await axios.delete(
+          `${config.backendUrl}/staged-files/${item.file.id}`,
+          { timeout: 8_000 },
+        );
+        stagedFilesProvider.removeFile(item.file.id);
+        vscode.window.showInformationMessage(`Unstaged: ${item.file.filepath}`);
+      } catch {
+        vscode.window.showErrorMessage('Failed to unstage file. Try again.');
+      }
+    }),
+
+    // Open a staged file locally
+    vscode.commands.registerCommand('gitphone.openStagedFile', async (filepath: string) => {
+      const workspaceFolders = vscode.workspace.workspaceFolders;
+      if (!workspaceFolders) return;
+
+      for (const folder of workspaceFolders) {
+        const uri = vscode.Uri.joinPath(folder.uri, filepath);
+        try {
+          await vscode.window.showTextDocument(uri, { preview: true });
+          return;
+        } catch {
+          // File might not exist locally — try next folder
+        }
+      }
+      vscode.window.showWarningMessage(`File not found locally: ${filepath}`);
+    }),
+
+    // Manually force-stage the current open file
+    vscode.commands.registerCommand('gitphone.stageCurrentFile', async () => {
+      const editor = vscode.window.activeTextEditor;
+      if (!editor) {
+        vscode.window.showWarningMessage('No file is currently open.');
+        return;
+      }
+      await onFileSaved(editor.document);
+      setTimeout(() => stagedFilesProvider.refresh(), 1000);
     }),
   );
 
   // ── File watcher ──────────────────────────────────────────────────────────
-  const saveListener = vscode.workspace.onDidSaveTextDocument(
-    (document) => onFileSaved(document),
-  );
+  const saveListener = vscode.workspace.onDidSaveTextDocument(async (document) => {
+    await onFileSaved(document);
+    // Refresh sidebar after a short delay to let the server process
+    setTimeout(() => stagedFilesProvider.refresh(), 1500);
+  });
   context.subscriptions.push(saveListener);
 
   // ── Startup logic ─────────────────────────────────────────────────────────
   if (isConfigured()) {
     await onStartupConfigured(context);
+    stagedFilesProvider.refresh();
   } else {
     setDisconnected();
-    // Prompt setup on first install
     const choice = await vscode.window.showInformationMessage(
       '📱 GitPhone is not configured yet. Set it up to start committing from Telegram!',
       'Open Setup',

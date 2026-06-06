@@ -22,14 +22,15 @@ COPY --from=builder /opt/venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
 # Copy ONLY backend source files — no extension/, no public/
-COPY main.py          .
-COPY bot.py           .
-COPY admin.py         .
-COPY github_service.py .
-COPY diff_service.py  .
+COPY main.py             .
+COPY bot.py              .
+COPY admin.py            .
+COPY channel_logger.py   .
+COPY github_service.py   .
+COPY diff_service.py     .
 COPY supabase_service.py .
-COPY models/          ./models/
-COPY routes/          ./routes/
+COPY models/             ./models/
+COPY routes/             ./routes/
 
 # Non-root user for security
 RUN useradd -m -u 1001 gitphone

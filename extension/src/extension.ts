@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import { initConfig, isConfigured, getConfig } from './config';
 import { initCache, clearAll as clearCache } from './localCache';
 import { initStatusBar, setConnected, setDisconnected, dispose as disposeStatusBar } from './statusBar';
-import { onFileSaved, resetStagedCount } from './fileWatcher';
+import { onFileSaved, onFileCreated, onFileDeleted, onFileRenamed, resetStagedCount } from './fileWatcher';
 import { SetupPanel } from './setupPanel';
 import { getVersion, healthCheck, syncFile } from './api';
 import { StagedFilesProvider, StagedFileItem } from './stagedFilesProvider';
@@ -200,13 +200,42 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }),
   );
 
-  // ── File watcher ──────────────────────────────────────────────────────────
+  // ── File Watchers ─────────────────────────────────────────────────────────
+
+  // 1. Modified files (saved in editor)
   const saveListener = vscode.workspace.onDidSaveTextDocument(async (document) => {
     await onFileSaved(document);
-    // Refresh sidebar after a short delay to let the server process
     setTimeout(() => stagedFilesProvider.refresh(), 1500);
   });
   context.subscriptions.push(saveListener);
+
+  // 2. Newly created files (created via file explorer, terminal, or Ctrl+N → Save)
+  const createListener = vscode.workspace.onDidCreateFiles(async (event) => {
+    for (const uri of event.files) {
+      await onFileCreated(uri);
+    }
+    setTimeout(() => stagedFilesProvider.refresh(), 1500);
+  });
+  context.subscriptions.push(createListener);
+
+  // 3. Deleted files — stage as deletion so the bot can push the delete to GitHub
+  const deleteListener = vscode.workspace.onDidDeleteFiles(async (event) => {
+    for (const uri of event.files) {
+      await onFileDeleted(uri);
+    }
+    setTimeout(() => stagedFilesProvider.refresh(), 1500);
+  });
+  context.subscriptions.push(deleteListener);
+
+  // 4. Renamed files = delete old path + create new path
+  const renameListener = vscode.workspace.onDidRenameFiles(async (event) => {
+    for (const { oldUri, newUri } of event.files) {
+      await onFileDeleted(oldUri);   // old path becomes a deletion
+      await onFileCreated(newUri);   // new path becomes a creation
+    }
+    setTimeout(() => stagedFilesProvider.refresh(), 1500);
+  });
+  context.subscriptions.push(renameListener);
 
   // ── Startup logic ─────────────────────────────────────────────────────────
   if (isConfigured()) {

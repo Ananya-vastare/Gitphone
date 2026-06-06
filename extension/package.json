@@ -2,7 +2,7 @@
   "name": "gitphone",
   "displayName": "GitPhone",
   "description": "Commit to GitHub from anywhere — stage in VS Code, commit via Telegram bot",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "publisher": "ankittroy-21",
   "license": "SEE LICENSE IN LICENSE",
   "homepage": "https://github.com/ankittroy-21/gitphone#readme",

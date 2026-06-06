@@ -103,6 +103,22 @@ class GitHubService:
                     conflict_files.append(filepath)
                     continue
 
+                # ── Handle deletions ───────────────────────────────────
+                change_type = staged.get("change_type", "modify")
+                if change_type == "delete" or stored_base_sha == "delete":
+                    if not gh_file["exists"]:
+                        # File already deleted on GitHub — nothing to do
+                        print(f"[github_service] Skip delete {filepath} — not on GitHub")
+                        continue
+                    result = repo.delete_file(
+                        path=filepath,
+                        message=commit_message,
+                        sha=current_sha,
+                        branch=branch,
+                    )
+                    last_sha = result["commit"].sha
+                    continue
+
                 # ── Reconstruct final content ─────────────────────────────
                 if is_binary or full_content_b64:
                     # Binary or full-content file — decode base64 directly

@@ -1,4 +1,4 @@
-﻿/**
+/**
  * fileWatcher.ts â€” Watches for file saves and syncs diffs to the backend.
  * Auto-detects the git remote repo and sends it with every sync payload.
  */
@@ -144,13 +144,13 @@ export async function onFileSaved(document: vscode.TextDocument): Promise<void> 
 
   const baseSha = getSha(relativePath) ?? 'new_file';
 
-  // â”€â”€ Auto-detect git repo & branch â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // ── Auto-detect git repo & branch ──────────────────────────────────────────
   const gitInfo = getCachedGitRepo(workspaceRoot);
   const activeRepo   = gitInfo?.repo   || config.defaultRepo || undefined;
   const activeBranch = gitInfo?.branch || config.branch     || undefined;
 
   setSyncing();
-  console.log(`[GitPhone] Syncing ${relativePath} â†’ ${activeRepo ?? 'unknown repo'}`);
+  console.log(`[GitPhone] Syncing ${relativePath} → ${activeRepo ?? 'unknown repo'} [modify]`);
 
   try {
     await syncFile({
@@ -163,6 +163,7 @@ export async function onFileSaved(document: vscode.TextDocument): Promise<void> 
       file_size: stats.size,
       active_repo: activeRepo,
       active_branch: activeBranch,
+      change_type: 'modify',
     });
 
     _stagedCount++;
@@ -206,5 +207,153 @@ function shouldIgnore(relativePath: string): boolean {
     if (relativePath.endsWith(ext)) return true;
   }
   return false;
+}
+
+
+// ── onFileCreated — handles new files added to workspace ─────────────────────
+
+/**
+ * Called by onDidCreateFiles.
+ * Sends the full file content as a "create" type staged entry.
+ * Skips ignored paths, binaries, and files > 10MB.
+ */
+export async function onFileCreated(uri: vscode.Uri): Promise<void> {
+  if (!isConfigured()) return;
+  const config = getConfig()!;
+
+  const workspaceFolders = vscode.workspace.workspaceFolders;
+  if (!workspaceFolders || workspaceFolders.length === 0) return;
+  const workspaceRoot = workspaceFolders[0].uri.fsPath;
+
+  const filePath = uri.fsPath;
+  if (!filePath.startsWith(workspaceRoot)) return;
+
+  const relativePath = path.relative(workspaceRoot, filePath).replace(/\\/g, '/');
+  if (shouldIgnore(relativePath)) return;
+
+  // Skip directories
+  try {
+    const stat = fs.statSync(filePath);
+    if (stat.isDirectory()) return;
+    if (stat.size > MAX_FILE_SIZE) return;
+  } catch {
+    return; // File may have been deleted between create and handler
+  }
+
+  const gitInfo = getCachedGitRepo(workspaceRoot);
+  const activeRepo   = gitInfo?.repo   || config.defaultRepo || undefined;
+  const activeBranch = gitInfo?.branch || config.branch     || undefined;
+
+  // Read full content (new file — no diff to compute)
+  let fullContent: string | null = null;
+  let diffText: string | null = null;
+  const isBinary = detectBinary(filePath);
+
+  try {
+    if (isBinary) {
+      fullContent = fs.readFileSync(filePath).toString('base64');
+    } else {
+      const rawContent = fs.readFileSync(filePath, 'utf8');
+      const normalizedNew = normalizeLineEndings(rawContent);
+      // For a brand new file the old content is empty — diff shows all lines as additions
+      diffText = computeDiff('', normalizedNew, relativePath);
+      if (!diffText && !normalizedNew) return; // Truly empty file — skip
+      if (!diffText) {
+        // computeDiff returned null for an empty-to-something diff — use full content
+        fullContent = Buffer.from(rawContent).toString('base64');
+      }
+    }
+  } catch (err) {
+    console.error(`[GitPhone] Failed to read created file: ${err}`);
+    return;
+  }
+
+  if (!diffText && !fullContent) return;
+
+  setSyncing();
+  console.log(`[GitPhone] Staging new file: ${relativePath}`);
+
+  try {
+    const stat = fs.statSync(filePath);
+    await syncFile({
+      telegram_id: config.telegramId,
+      filepath: relativePath,
+      diff: diffText,
+      full_content: fullContent,
+      base_sha: 'new_file',
+      is_binary: isBinary,
+      file_size: stat.size,
+      active_repo: activeRepo,
+      active_branch: activeBranch,
+      change_type: 'create',
+    });
+    setConnected(++_stagedCount);
+    increment();
+  } catch (err) {
+    console.error(`[GitPhone] Failed to stage created file: ${extractErrorMessage(err)}`);
+    setError(`Create failed: ${extractErrorMessage(err)}`);
+    setTimeout(() => setConnected(_stagedCount), 3000);
+  }
+}
+
+
+// ── onFileDeleted — handles files removed from workspace ─────────────────────
+
+/**
+ * Called by onDidDeleteFiles.
+ * Sends a "delete" type staged entry. No content needed — the bot will
+ * call GitHub's delete blob API when committing.
+ */
+export async function onFileDeleted(uri: vscode.Uri): Promise<void> {
+  if (!isConfigured()) return;
+  const config = getConfig()!;
+
+  const workspaceFolders = vscode.workspace.workspaceFolders;
+  if (!workspaceFolders || workspaceFolders.length === 0) return;
+  const workspaceRoot = workspaceFolders[0].uri.fsPath;
+
+  const filePath = uri.fsPath;
+  if (!filePath.startsWith(workspaceRoot)) return;
+
+  const relativePath = path.relative(workspaceRoot, filePath).replace(/\\/g, '/');
+  if (shouldIgnore(relativePath)) return;
+
+  const gitInfo = getCachedGitRepo(workspaceRoot);
+  const activeRepo   = gitInfo?.repo   || config.defaultRepo || undefined;
+  const activeBranch = gitInfo?.branch || config.branch     || undefined;
+
+  setSyncing();
+  console.log(`[GitPhone] Staging deletion: ${relativePath}`);
+
+  try {
+    await syncFile({
+      telegram_id: config.telegramId,
+      filepath: relativePath,
+      diff: null,
+      full_content: null,
+      base_sha: 'delete',          // sentinel value — tells backend this is a deletion
+      is_binary: false,
+      file_size: 0,
+      active_repo: activeRepo,
+      active_branch: activeBranch,
+      change_type: 'delete',
+    });
+    setConnected(++_stagedCount);
+    increment();
+  } catch (err) {
+    console.error(`[GitPhone] Failed to stage deletion: ${extractErrorMessage(err)}`);
+    setError(`Delete stage failed: ${extractErrorMessage(err)}`);
+    setTimeout(() => setConnected(_stagedCount), 3000);
+  }
+}
+
+
+// ── onFileRenamed — convenience export (extension.ts uses delete+create) ──────
+export async function onFileRenamed(
+  oldUri: vscode.Uri,
+  newUri: vscode.Uri
+): Promise<void> {
+  await onFileDeleted(oldUri);
+  await onFileCreated(newUri);
 }
 

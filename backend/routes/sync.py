@@ -1,4 +1,4 @@
-﻿"""
+"""
 routes/sync.py â€” POST /sync-file
 Called by VS Code extension on every file save.
 Stores the diff in Supabase staged_files.
@@ -37,8 +37,9 @@ async def sync_file(payload: SyncFilePayload, _auth: str = Depends(require_api_k
                 detail=f"File exceeds 10MB limit ({payload.file_size} bytes)"
             )
 
-        # Step 3: Must have either diff or full_content
-        if not payload.diff and not payload.full_content:
+        # Step 3: Validate content — deletions are allowed with no diff/content
+        is_deletion = payload.change_type == "delete" or payload.base_sha == "delete"
+        if not is_deletion and not payload.diff and not payload.full_content:
             raise HTTPException(
                 status_code=400,
                 detail="Either diff or full_content must be provided"
@@ -51,7 +52,7 @@ async def sync_file(payload: SyncFilePayload, _auth: str = Depends(require_api_k
         if payload.active_repo:
             update_active_repo(payload.telegram_id, payload.active_repo, effective_branch)
 
-        # Step 5: Upsert staged file (include repo for per-repo grouping)
+        # Step 5: Upsert staged file (include repo + change_type for grouping and display)
         staged_payload = {
             "user_id": user["id"],
             "telegram_id": payload.telegram_id,
@@ -62,6 +63,7 @@ async def sync_file(payload: SyncFilePayload, _auth: str = Depends(require_api_k
             "is_binary": payload.is_binary,
             "file_size": payload.file_size,
             "repo": effective_repo,
+            "change_type": payload.change_type or "modify",
             "status": "pending",
         }
         saved = upsert_staged_file(staged_payload)

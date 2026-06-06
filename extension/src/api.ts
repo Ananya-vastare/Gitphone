@@ -18,6 +18,7 @@ export interface SyncFilePayload {
   file_size: number;
   active_repo?: string;    // Auto-detected from .git/config
   active_branch?: string;  // Auto-detected from .git/HEAD
+  change_type?: 'create' | 'modify' | 'delete';  // Type of change
 }
 
 export interface RegisterResponse {

@@ -111,20 +111,28 @@ def _time_ago(iso_str: str) -> str:
 
 
 def _build_files_keyboard(staged_files: list[dict], selected: set[str]) -> InlineKeyboardMarkup:
-    """Build inline keyboard for file selection."""
+    """Build inline keyboard for file selection with change type icons."""
     buttons = []
     for f in staged_files:
         file_id = f["id"]
         filepath = f["filepath"]
         size = _format_file_size(f.get("file_size", 0))
-        checked = "✅" if file_id in selected else "☐"
-        label = f"{checked}  {filepath}  {size}"
+        checked = "\u2705" if file_id in selected else "\u2610"
+        # Show change type
+        change = f.get("change_type", "modify")
+        if change == "create":
+            type_icon = "\u2795"   # ➕ new file
+        elif change == "delete":
+            type_icon = "\U0001f5d1"  # 🗑️ deletion
+        else:
+            type_icon = "\u270f"   # ✏️ modification
+        label = f"{checked} {type_icon} {filepath}" + (f"  {size}" if size != "0B" else "")
         buttons.append([InlineKeyboardButton(label, callback_data=f"FILE_TOGGLE:{file_id}")])
 
     done_count = f" ({len(selected)})" if selected else ""
     buttons.append([
-        InlineKeyboardButton("☑️ Select All", callback_data="FILE_SELECT_ALL"),
-        InlineKeyboardButton(f"✅ Done{done_count}", callback_data="FILE_DONE"),
+        InlineKeyboardButton("\u2611\ufe0f Select All", callback_data="FILE_SELECT_ALL"),
+        InlineKeyboardButton(f"\u2705 Done{done_count}", callback_data="FILE_DONE"),
     ])
     return InlineKeyboardMarkup(buttons)
 

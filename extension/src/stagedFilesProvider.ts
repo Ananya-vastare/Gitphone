@@ -1,112 +1,209 @@
 /**
- * stagedFilesProvider.ts — TreeDataProvider for the GitPhone sidebar panel.
+ * stagedFilesProvider.ts - Real-time Git sidebar using vscode.git API.
  *
- * Shows all staged files from the backend, grouped by change type.
- * Clicking a file shows an inline diff vs. the current local version.
+ * Shows two sections:
+ *   STAGED CHANGES   - files in the git index (git add)
+ *   CHANGES          - modified/untracked in working tree
+ *
+ * Clicking a file shows an inline VS Code diff.
+ * + button stages a file. - button unstages.
+ * "Send to GitPhone" button syncs staged files to the backend for Telegram commit.
  */
 
 import * as vscode from 'vscode';
 import * as path from 'path';
-import * as fs from 'fs';
 import axios from 'axios';
 import { getConfig, isConfigured } from './config';
 
-// ── Data Models ───────────────────────────────────────────────────────────────
+// ── Git Extension API types (inline to avoid needing git.d.ts) ──────────────
 
-export interface StagedFile {
-  id: string;
-  filepath: string;
-  file_size: number;
-  is_binary: boolean;
-  staged_at: string;
-  status: 'pending' | 'committed';
-  change_type?: 'create' | 'modify' | 'delete';
-  diff?: string;
-  repo?: string;
+interface GitChange {
+  readonly uri: vscode.Uri;
+  readonly originalUri: vscode.Uri;
+  readonly renameUri: vscode.Uri | undefined;
+  readonly status: number; // GitStatus enum values
 }
 
-// ── Tree Item ─────────────────────────────────────────────────────────────────
+interface GitRepository {
+  readonly rootUri: vscode.Uri;
+  readonly state: {
+    readonly indexChanges: GitChange[];          // staged
+    readonly workingTreeChanges: GitChange[];    // unstaged modified
+    readonly mergeChanges: GitChange[];
+    readonly onDidChange: vscode.Event<void>;
+  };
+  add(resources: vscode.Uri[]): Promise<void>;
+  revert(resources: vscode.Uri[]): Promise<void>;
+  diff(cached?: boolean): Promise<string>;
+  diffWithHEAD(path: string): Promise<string>;
+  diffIndexWithHEAD(path: string): Promise<string>;
+}
 
-export class StagedFileItem extends vscode.TreeItem {
+interface GitAPI {
+  repositories: GitRepository[];
+  onDidOpenRepository: vscode.Event<GitRepository>;
+}
+
+// Git Status enum (from vscode.git extension)
+const GitStatus = {
+  INDEX_MODIFIED:  0,
+  INDEX_ADDED:     1,
+  INDEX_DELETED:   2,
+  INDEX_RENAMED:   3,
+  INDEX_COPIED:    4,
+  MODIFIED:        5,
+  DELETED:         6,
+  UNTRACKED:       7,
+  IGNORED:         8,
+  INTENT_TO_ADD:   9,
+  ADDED_BY_US:     10,
+  ADDED_BY_THEM:   11,
+  DELETED_BY_US:   12,
+  DELETED_BY_THEM: 13,
+  BOTH_ADDED:      14,
+  BOTH_DELETED:    15,
+  BOTH_MODIFIED:   16,
+};
+
+// ── Tree Item Types ───────────────────────────────────────────────────────────
+
+export type SectionType = 'staged' | 'changes';
+
+export class SectionHeaderItem extends vscode.TreeItem {
   constructor(
-    public readonly file: StagedFile,
-    public readonly collapsibleState: vscode.TreeItemCollapsibleState,
+    public readonly section: SectionType,
+    public readonly count: number,
   ) {
-    super(file.filepath, collapsibleState);
+    super(
+      section === 'staged'
+        ? `Staged Changes (${count})`
+        : `Changes (${count})`,
+      vscode.TreeItemCollapsibleState.Expanded,
+    );
+    this.contextValue = 'section';
+    this.iconPath = new vscode.ThemeIcon(section === 'staged' ? 'check' : 'diff');
+  }
+}
 
-    const parts = file.filepath.replace(/\\/g, '/').split('/');
-    this.label = parts[parts.length - 1];
-    this.description = parts.slice(0, -1).join('/') || '';
+export class FileItem extends vscode.TreeItem {
+  constructor(
+    public readonly change: GitChange,
+    public readonly section: SectionType,
+    repoRoot: string,
+  ) {
+    const relPath = path.relative(repoRoot, change.uri.fsPath);
+    const parts = relPath.replace(/\\/g, '/').split('/');
+    const filename = parts[parts.length - 1];
+    const dir = parts.slice(0, -1).join('/');
 
-    const changeLabel =
-      file.change_type === 'create' ? '➕ New' :
-      file.change_type === 'delete' ? '🗑️ Deleted' :
-      '✏️ Modified';
+    super(filename, vscode.TreeItemCollapsibleState.None);
+
+    this.description = dir;
+    this.resourceUri = change.uri;
+    this.contextValue = section === 'staged' ? 'stagedFile' : 'changedFile';
+
+    // Status letter + color
+    const { letter, icon, color } = _statusInfo(change.status, section);
+    this.description = `${dir}  ${letter}`;
+    this.iconPath = new vscode.ThemeIcon(icon, new vscode.ThemeColor(color));
 
     this.tooltip = new vscode.MarkdownString(
-      `**${file.filepath}**\n\n` +
-      `${changeLabel}  •  ${_formatSize(file.file_size)}\n\n` +
-      `Staged: ${_timeAgo(file.staged_at)}\n\n` +
-      `_Click to view diff_`
+      `**${relPath}**\n\n${_statusLabel(change.status, section)}\n\n` +
+      (section === 'staged'
+        ? '_Click to view diff — right-click to unstage_'
+        : '_Click to view diff — click **+** to stage_')
     );
 
-    // Icon differs by change type
-    if (file.change_type === 'create') {
-      this.iconPath = new vscode.ThemeIcon('diff-added', new vscode.ThemeColor('gitDecoration.addedResourceForeground'));
-    } else if (file.change_type === 'delete') {
-      this.iconPath = new vscode.ThemeIcon('diff-removed', new vscode.ThemeColor('gitDecoration.deletedResourceForeground'));
-    } else {
-      this.iconPath = file.is_binary
-        ? new vscode.ThemeIcon('file-binary', new vscode.ThemeColor('gitDecoration.modifiedResourceForeground'))
-        : new vscode.ThemeIcon('diff-modified', new vscode.ThemeColor('gitDecoration.modifiedResourceForeground'));
-    }
-
-    this.contextValue = 'stagedFile';
-
-    // Click → show diff
+    // Clicking the file shows diff
     this.command = {
-      command: 'gitphone.showDiff',
+      command: 'gitphone.showFileDiff',
       title: 'Show Diff',
-      arguments: [file],
+      arguments: [change, section, repoRoot],
     };
   }
 }
 
 export class MessageItem extends vscode.TreeItem {
-  constructor(label: string, icon: string) {
+  constructor(label: string, icon: string, description = '') {
     super(label, vscode.TreeItemCollapsibleState.None);
     this.iconPath = new vscode.ThemeIcon(icon);
+    this.description = description;
     this.contextValue = 'message';
   }
 }
 
-// ── Provider ─────────────────────────────────────────────────────────────────
+// ── Main Provider ─────────────────────────────────────────────────────────────
 
-export class StagedFilesProvider implements vscode.TreeDataProvider<vscode.TreeItem> {
+export class GitPhoneSidebarProvider
+  implements vscode.TreeDataProvider<vscode.TreeItem> {
+
   private _onDidChangeTreeData = new vscode.EventEmitter<vscode.TreeItem | undefined | null>();
   readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
 
-  private _stagedFiles: StagedFile[] = [];
-  private _loading = false;
-  private _error: string | null = null;
-  private _lastRefresh: Date | null = null;
-  private _refreshTimer: ReturnType<typeof setInterval> | undefined;
+  private _git: GitAPI | undefined;
+  private _repo: GitRepository | undefined;
+  private _disposables: vscode.Disposable[] = [];
+  private _repoListener: vscode.Disposable | undefined;
 
   constructor() {
-    // Auto-refresh every 30 seconds
-    this._refreshTimer = setInterval(() => {
-      this.refresh();
-    }, 30_000);
+    this._initGit();
+  }
+
+  private _initGit(): void {
+    const gitExtension = vscode.extensions.getExtension('vscode.git');
+    if (!gitExtension) {
+      console.warn('[GitPhone] vscode.git not found');
+      return;
+    }
+
+    if (!gitExtension.isActive) {
+      gitExtension.activate().then(() => this._initGit());
+      return;
+    }
+
+    this._git = (gitExtension.exports as any).getAPI(1) as GitAPI;
+
+    // Hook to first available repository
+    const hookRepo = (repo: GitRepository) => {
+      if (this._repoListener) this._repoListener.dispose();
+      this._repo = repo;
+      this._repoListener = repo.state.onDidChange(() => {
+        this._onDidChangeTreeData.fire(undefined);
+      });
+      this._onDidChangeTreeData.fire(undefined);
+    };
+
+    if (this._git.repositories.length > 0) {
+      hookRepo(this._git.repositories[0]);
+    }
+
+    // Also listen for new repos opening
+    const sub = this._git.onDidOpenRepository((repo) => {
+      if (!this._repo) hookRepo(repo);
+    });
+    this._disposables.push(sub);
   }
 
   dispose() {
-    if (this._refreshTimer) clearInterval(this._refreshTimer);
+    this._repoListener?.dispose();
+    for (const d of this._disposables) d.dispose();
     this._onDidChangeTreeData.dispose();
   }
 
   refresh(): void {
-    this._lastRefresh = null; // force re-fetch
     this._onDidChangeTreeData.fire(undefined);
+  }
+
+  get repository(): GitRepository | undefined {
+    return this._repo;
+  }
+
+  get stagedChanges(): GitChange[] {
+    return this._repo?.state.indexChanges ?? [];
+  }
+
+  get workingTreeChanges(): GitChange[] {
+    return this._repo?.state.workingTreeChanges ?? [];
   }
 
   getTreeItem(element: vscode.TreeItem): vscode.TreeItem {
@@ -114,257 +211,197 @@ export class StagedFilesProvider implements vscode.TreeDataProvider<vscode.TreeI
   }
 
   async getChildren(element?: vscode.TreeItem): Promise<vscode.TreeItem[]> {
-    if (element) return [];
-
-    if (!isConfigured()) {
-      return [new MessageItem('Not configured — click ⚙ Setup', 'warning')];
+    if (!this._git) {
+      return [new MessageItem('Git extension not found', 'warning')];
+    }
+    if (!this._repo) {
+      return [new MessageItem('No Git repository in workspace', 'git-branch')];
     }
 
-    await this._fetchStagedFiles();
+    const repoRoot = this._repo.rootUri.fsPath;
+    const staged  = this._repo.state.indexChanges;
+    const changed = this._repo.state.workingTreeChanges;
 
-    if (this._loading) {
-      return [new MessageItem('Loading...', 'loading~spin')];
-    }
+    // Top-level: section headers
+    if (!element) {
+      const items: vscode.TreeItem[] = [];
 
-    if (this._error) {
-      return [new MessageItem(`Error: ${this._error}`, 'error')];
-    }
-
-    if (this._stagedFiles.length === 0) {
-      return [
-        new MessageItem('No files staged yet', 'inbox'),
-        new MessageItem('Save a file in VS Code to stage it', 'info'),
-      ];
-    }
-
-    return this._stagedFiles.map(
-      (f) => new StagedFileItem(f, vscode.TreeItemCollapsibleState.None),
-    );
-  }
-
-  get stagedCount(): number {
-    return this._stagedFiles.length;
-  }
-
-  get stagedFiles(): StagedFile[] {
-    return [...this._stagedFiles];
-  }
-
-  removeFile(fileId: string): void {
-    this._stagedFiles = this._stagedFiles.filter((f) => f.id !== fileId);
-    this._onDidChangeTreeData.fire(undefined);
-  }
-
-  clearAll(): void {
-    this._stagedFiles = [];
-    this._onDidChangeTreeData.fire(undefined);
-  }
-
-  upsertFile(file: StagedFile): void {
-    const idx = this._stagedFiles.findIndex((f) => f.filepath === file.filepath);
-    if (idx >= 0) {
-      this._stagedFiles[idx] = file;
-    } else {
-      this._stagedFiles.push(file);
-    }
-    this._onDidChangeTreeData.fire(undefined);
-  }
-
-  // ── Private ────────────────────────────────────────────────────────────────
-
-  private async _fetchStagedFiles(): Promise<void> {
-    const config = getConfig();
-    if (!config) return;
-
-    // Debounce: skip if fetched within 3s
-    if (this._lastRefresh && Date.now() - this._lastRefresh.getTime() < 3_000) {
-      return;
-    }
-
-    this._loading = true;
-    this._error = null;
-
-    try {
-      const response = await axios.get(
-        `${config.backendUrl}/staged-files/${config.telegramId}`,
-        {
-          timeout: 8_000,
-          headers: {
-            'X-Telegram-Id': config.telegramId,
-            'X-Api-Key': config.apiKey ?? '',
-          },
-        },
-      );
-      this._stagedFiles = response.data?.files ?? [];
-      this._lastRefresh = new Date();
-    } catch (err: any) {
-      this._error = err?.response?.data?.detail ?? 'Cannot reach backend';
-      this._stagedFiles = [];
-    } finally {
-      this._loading = false;
-    }
-  }
-}
-
-// ── Diff View Helpers ─────────────────────────────────────────────────────────
-
-/**
- * Show an inline VS Code diff for a staged file.
- * Left = current local disk version, Right = staged (what will be committed).
- */
-export async function showStagedDiff(
-  file: StagedFile,
-  context: vscode.ExtensionContext,
-): Promise<void> {
-  const workspaceFolders = vscode.workspace.workspaceFolders;
-  if (!workspaceFolders) {
-    vscode.window.showWarningMessage('No workspace open.');
-    return;
-  }
-
-  const workspaceRoot = workspaceFolders[0].uri.fsPath;
-  const localPath = path.join(workspaceRoot, file.filepath);
-
-  if (file.change_type === 'delete') {
-    // Deleted file — show a message, nothing to diff
-    vscode.window.showInformationMessage(
-      `🗑️ "${file.filepath}" is staged for deletion. It will be removed from GitHub on commit.`,
-      'OK'
-    );
-    return;
-  }
-
-  // Read current local file content
-  let localContent = '';
-  try {
-    if (fs.existsSync(localPath)) {
-      localContent = fs.readFileSync(localPath, 'utf8');
-    }
-  } catch {
-    localContent = '';
-  }
-
-  // For new files: "before" is empty
-  // For modifications: "before" is the current local file (what exists now)
-  // "after" = the staged diff applied to the before content
-  let stagedContent = localContent; // fallback: same as local (no diff available)
-
-  if (file.diff) {
-    // Apply the staged diff to reconstruct what will be committed
-    try {
-      stagedContent = applyUnifiedDiff(
-        file.change_type === 'create' ? '' : localContent,
-        file.diff
-      );
-    } catch {
-      // If diff apply fails, show the raw diff text
-      stagedContent = file.diff;
-    }
-  }
-
-  // Create virtual documents for diff view
-  const scheme = 'gitphone-staged';
-  const beforeLabel = file.change_type === 'create' ? '(new file)' : file.filepath;
-  const afterLabel = `${file.filepath} (staged)`;
-
-  // Register a simple content provider
-  const provider = vscode.workspace.registerTextDocumentContentProvider(scheme, {
-    provideTextDocumentContent(uri: vscode.Uri): string {
-      const which = uri.query;
-      return which === 'before'
-        ? (file.change_type === 'create' ? '' : localContent)
-        : stagedContent;
-    },
-  });
-
-  const beforeUri = vscode.Uri.parse(`${scheme}:${encodeURIComponent(beforeLabel)}?before`);
-  const afterUri  = vscode.Uri.parse(`${scheme}:${encodeURIComponent(afterLabel)}?after`);
-
-  try {
-    const changeIcon = file.change_type === 'create' ? '➕' : '✏️';
-    await vscode.commands.executeCommand(
-      'vscode.diff',
-      beforeUri,
-      afterUri,
-      `${changeIcon} GitPhone: ${path.basename(file.filepath)}`,
-      { preview: true },
-    );
-  } finally {
-    // Dispose the provider after a short delay
-    setTimeout(() => provider.dispose(), 5000);
-  }
-}
-
-/**
- * Minimal unified diff applier — handles simple +/- line diffs.
- * Falls back gracefully if the diff is malformed.
- */
-function applyUnifiedDiff(original: string, diff: string): string {
-  try {
-    const origLines = original.split('\n');
-    const result: string[] = [];
-    let origIdx = 0;
-
-    const diffLines = diff.split('\n');
-    let i = 0;
-
-    // Skip header lines (---, +++, @@...@@)
-    while (i < diffLines.length && !diffLines[i].startsWith('@@')) i++;
-
-    for (; i < diffLines.length; i++) {
-      const line = diffLines[i];
-      if (line.startsWith('@@')) {
-        // Parse hunk header: @@ -a,b +c,d @@
-        const match = line.match(/@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/);
-        if (match) {
-          const oldStart = parseInt(match[1]) - 1;
-          // Copy unchanged lines up to this hunk
-          while (origIdx < oldStart) {
-            result.push(origLines[origIdx++]);
-          }
+      if (staged.length > 0) {
+        items.push(new SectionHeaderItem('staged', staged.length));
+      }
+      if (changed.length > 0) {
+        items.push(new SectionHeaderItem('changes', changed.length));
+      }
+      if (staged.length === 0 && changed.length === 0) {
+        items.push(new MessageItem(
+          'No changes detected',
+          'check',
+          'Working tree clean'
+        ));
+        if (isConfigured()) {
+          items.push(new MessageItem(
+            'GitPhone connected',
+            'plug',
+            'Save files to stage via Telegram'
+          ));
         }
-      } else if (line.startsWith('-')) {
-        // Remove line from original
-        origIdx++;
-      } else if (line.startsWith('+')) {
-        // Add new line
-        result.push(line.slice(1));
-      } else if (line.startsWith(' ') || line === '') {
-        // Context line — keep from original
-        if (origIdx < origLines.length) {
-          result.push(origLines[origIdx++]);
-        }
+      }
+
+      return items;
+    }
+
+    // Children of section headers
+    if (element instanceof SectionHeaderItem) {
+      if (element.section === 'staged') {
+        return staged.map(c => new FileItem(c, 'staged', repoRoot));
+      } else {
+        return changed.map(c => new FileItem(c, 'changes', repoRoot));
       }
     }
 
-    // Append remaining original lines
-    while (origIdx < origLines.length) {
-      result.push(origLines[origIdx++]);
-    }
-
-    return result.join('\n');
-  } catch {
-    return original; // fallback
+    return [];
   }
+}
+
+// ── Commands ──────────────────────────────────────────────────────────────────
+
+/**
+ * Show a VS Code diff for a file.
+ * For staged files: diff against HEAD (what was last committed).
+ * For working tree files: diff current vs. saved.
+ */
+export async function showFileDiff(
+  change: GitChange,
+  section: SectionType,
+  repoRoot: string,
+): Promise<void> {
+  if (section === 'staged') {
+    // Diff: HEAD version vs index (staged) version
+    const title = `${path.basename(change.uri.fsPath)} (staged)`;
+    try {
+      await vscode.commands.executeCommand(
+        'vscode.diff',
+        change.originalUri.with({ scheme: 'git', query: 'HEAD' }),
+        change.uri.with({ scheme: 'git', query: '~' }),  // index
+        `${title}`,
+        { preview: true },
+      );
+      return;
+    } catch {
+      // Fallback to simple open
+    }
+  }
+  // Working tree: open the actual file
+  await vscode.window.showTextDocument(change.uri, { preview: true });
+}
+
+/**
+ * Sync currently staged git files to the GitPhone backend (so they appear in Telegram /files).
+ * This replaces the old file-save-watcher approach.
+ */
+export async function syncStagedToBackend(
+  provider: GitPhoneSidebarProvider,
+  context: vscode.ExtensionContext,
+): Promise<void> {
+  const config = getConfig();
+  if (!config) {
+    vscode.window.showWarningMessage('GitPhone not configured. Open Setup first.');
+    return;
+  }
+
+  const staged = provider.stagedChanges;
+  if (staged.length === 0) {
+    vscode.window.showInformationMessage('No staged files to sync. Stage files with git first.');
+    return;
+  }
+
+  await vscode.window.withProgress(
+    {
+      location: vscode.ProgressLocation.Notification,
+      title: 'GitPhone: Syncing staged files...',
+      cancellable: false,
+    },
+    async (progress) => {
+      let synced = 0;
+      for (const change of staged) {
+        progress.report({ message: `${synced + 1}/${staged.length}: ${path.basename(change.uri.fsPath)}` });
+        try {
+          const content = await vscode.workspace.fs.readFile(change.uri);
+          const changeType = _gitChangeType(change.status);
+
+          await axios.post(
+            `${config.backendUrl}/sync`,
+            {
+              telegram_id: config.telegramId,
+              filepath: _relPath(change.uri.fsPath, provider.repository!.rootUri.fsPath),
+              content: Buffer.from(content).toString('base64'),
+              encoding: 'base64',
+              change_type: changeType,
+              is_binary: false,
+            },
+            {
+              timeout: 10_000,
+              headers: {
+                'X-Telegram-Id': config.telegramId,
+                'X-Api-Key': config.apiKey ?? '',
+              },
+            },
+          );
+          synced++;
+        } catch (err: any) {
+          console.error(`[GitPhone] sync error for ${change.uri.fsPath}:`, err?.message);
+        }
+      }
+
+      vscode.window.showInformationMessage(
+        `\u2705 GitPhone: ${synced} file(s) synced. Use /files in Telegram to commit.`,
+      );
+    },
+  );
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-function _formatSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes}B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
+function _statusInfo(status: number, section: SectionType): { letter: string; icon: string; color: string } {
+  if (section === 'staged') {
+    switch (status) {
+      case GitStatus.INDEX_ADDED:    return { letter: 'A', icon: 'diff-added',    color: 'gitDecoration.addedResourceForeground' };
+      case GitStatus.INDEX_DELETED:  return { letter: 'D', icon: 'diff-removed',  color: 'gitDecoration.deletedResourceForeground' };
+      case GitStatus.INDEX_RENAMED:  return { letter: 'R', icon: 'diff-renamed',  color: 'gitDecoration.renamedResourceForeground' };
+      default:                       return { letter: 'M', icon: 'diff-modified', color: 'gitDecoration.modifiedResourceForeground' };
+    }
+  } else {
+    switch (status) {
+      case GitStatus.UNTRACKED:      return { letter: 'U', icon: 'question',      color: 'gitDecoration.untrackedResourceForeground' };
+      case GitStatus.DELETED:        return { letter: 'D', icon: 'diff-removed',  color: 'gitDecoration.deletedResourceForeground' };
+      default:                       return { letter: 'M', icon: 'diff-modified', color: 'gitDecoration.modifiedResourceForeground' };
+    }
+  }
 }
 
-function _timeAgo(iso: string): string {
-  try {
-    const diff = Date.now() - new Date(iso).getTime();
-    const s = Math.floor(diff / 1000);
-    if (s < 60) return 'just now';
-    if (s < 3600) return `${Math.floor(s / 60)}m ago`;
-    if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
-    return `${Math.floor(s / 86400)}d ago`;
-  } catch {
-    return '';
+function _statusLabel(status: number, section: SectionType): string {
+  if (section === 'staged') {
+    switch (status) {
+      case GitStatus.INDEX_ADDED:   return 'Added (staged)';
+      case GitStatus.INDEX_DELETED: return 'Deleted (staged)';
+      case GitStatus.INDEX_RENAMED: return 'Renamed (staged)';
+      default:                      return 'Modified (staged)';
+    }
+  } else {
+    switch (status) {
+      case GitStatus.UNTRACKED:     return 'Untracked';
+      case GitStatus.DELETED:       return 'Deleted';
+      default:                      return 'Modified';
+    }
   }
+}
+
+function _gitChangeType(status: number): 'create' | 'delete' | 'modify' {
+  if (status === GitStatus.INDEX_ADDED || status === GitStatus.UNTRACKED) return 'create';
+  if (status === GitStatus.INDEX_DELETED || status === GitStatus.DELETED)  return 'delete';
+  return 'modify';
+}
+
+function _relPath(absolute: string, root: string): string {
+  return path.relative(root, absolute).replace(/\\/g, '/');
 }

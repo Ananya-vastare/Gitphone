@@ -1,6 +1,6 @@
 """
 github_service.py — All GitHub API interactions via PyGithub.
-Handles token validation, SHA fetching, and file commits.
+Handles token validation, SHA fetching, file commits, branch management, and PR creation.
 """
 
 import base64
@@ -14,21 +14,89 @@ class GitHubService:
 
     def validate_token_and_repo(self, token: str, repo_name: str) -> dict:
         """
-        Validates a PAT and checks access to the specified repo.
-        Returns dict: { ok, error?, default_branch? }
+        Validates a PAT/OAuth token and checks access to the specified repo.
+        Returns dict: { ok, error?, default_branch?, username? }
         """
         try:
             g = Github(token)
+            user = g.get_user()
             repo = g.get_repo(repo_name)
             return {
                 "ok": True,
                 "default_branch": repo.default_branch,
+                "username": user.login,
             }
         except GithubException as e:
             if e.status == 401:
                 return {"ok": False, "error": "invalid_token", "message": "GitHub token is invalid or expired"}
             if e.status == 404:
                 return {"ok": False, "error": "repo_not_found", "message": f"Repo '{repo_name}' not found or token has no access"}
+            return {"ok": False, "error": "github_error", "message": str(e.data)}
+        except Exception as e:
+            return {"ok": False, "error": "unknown", "message": str(e)}
+
+    def get_username(self, token: str) -> Optional[str]:
+        """Return the GitHub username for a given token."""
+        try:
+            return Github(token).get_user().login
+        except Exception:
+            return None
+
+    def list_branches(self, token: str, repo_name: str) -> list[str]:
+        """Return all branch names for a repo (max 50)."""
+        try:
+            repo = Github(token).get_repo(repo_name)
+            return [b.name for b in repo.get_branches()][:50]
+        except Exception as e:
+            print(f"[github_service] list_branches error: {e}")
+            return []
+
+    def get_default_branch(self, token: str, repo_name: str) -> str:
+        """Return the default branch name."""
+        try:
+            return Github(token).get_repo(repo_name).default_branch
+        except Exception:
+            return "main"
+
+    def create_branch(self, token: str, repo_name: str, branch_name: str, from_branch: str = "main") -> dict:
+        """
+        Create a new branch from from_branch.
+        Returns { ok, error? }
+        """
+        try:
+            repo = Github(token).get_repo(repo_name)
+            source_branch = repo.get_branch(from_branch)
+            repo.create_git_ref(
+                ref=f"refs/heads/{branch_name}",
+                sha=source_branch.commit.sha,
+            )
+            return {"ok": True}
+        except GithubException as e:
+            if e.status == 422:
+                return {"ok": False, "error": "branch_exists", "message": f"Branch '{branch_name}' already exists"}
+            return {"ok": False, "error": "github_error", "message": str(e.data)}
+        except Exception as e:
+            return {"ok": False, "error": "unknown", "message": str(e)}
+
+    def create_pull_request(self, token: str, repo_name: str, head: str, base: str, title: str, body: str = "") -> dict:
+        """
+        Create a pull request from head -> base.
+        Returns { ok, pr_url?, number?, error? }
+        """
+        try:
+            repo = Github(token).get_repo(repo_name)
+            pr = repo.create_pull(
+                title=title,
+                body=body or f"Changes committed via GitPhone\n\n---\n*Created automatically by GitPhone bot*",
+                head=head,
+                base=base,
+            )
+            return {"ok": True, "pr_url": pr.html_url, "number": pr.number}
+        except GithubException as e:
+            if e.status == 422:
+                # PR already exists
+                msg = str(e.data)
+                return {"ok": False, "error": "pr_exists", "message": msg}
             return {"ok": False, "error": "github_error", "message": str(e.data)}
         except Exception as e:
             return {"ok": False, "error": "unknown", "message": str(e)}

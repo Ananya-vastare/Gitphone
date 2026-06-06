@@ -365,3 +365,64 @@ def mark_files_committed(file_ids: list[str]) -> bool:
     except Exception as e:
         print(f"[supabase] mark_files_committed error: {e}")
         return False
+
+
+# ── Device Flow OAuth State ───────────────────────────────────────────────────
+
+def save_device_flow_state(telegram_id: str, state: dict) -> bool:
+    """Store GitHub Device Flow state (device_code, expires_at) in users table."""
+    try:
+        import json
+        get_client().table("users") \
+            .update({"device_flow_state": json.dumps(state)}) \
+            .eq("telegram_id", telegram_id) \
+            .execute()
+        return True
+    except Exception as e:
+        print(f"[supabase] save_device_flow_state error: {e}")
+        return False
+
+
+def get_device_flow_state(telegram_id: str) -> dict | None:
+    """Retrieve pending Device Flow state for a user."""
+    try:
+        import json
+        result = get_client().table("users") \
+            .select("device_flow_state") \
+            .eq("telegram_id", telegram_id) \
+            .single() \
+            .execute()
+        raw = result.data.get("device_flow_state") if result.data else None
+        if not raw:
+            return None
+        return json.loads(raw) if isinstance(raw, str) else raw
+    except Exception as e:
+        print(f"[supabase] get_device_flow_state error: {e}")
+        return None
+
+
+def delete_device_flow_state(telegram_id: str) -> bool:
+    """Clear device flow state after auth completes or expires."""
+    try:
+        get_client().table("users") \
+            .update({"device_flow_state": None}) \
+            .eq("telegram_id", telegram_id) \
+            .execute()
+        return True
+    except Exception as e:
+        print(f"[supabase] delete_device_flow_state error: {e}")
+        return False
+
+
+def update_github_token(telegram_id: str, token: str) -> bool:
+    """Update stored GitHub OAuth token after Device Flow authorization."""
+    try:
+        get_client().table("users") \
+            .update({"github_token": token}) \
+            .eq("telegram_id", telegram_id) \
+            .execute()
+        return True
+    except Exception as e:
+        print(f"[supabase] update_github_token error: {e}")
+        return False
+

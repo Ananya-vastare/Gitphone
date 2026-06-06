@@ -2,14 +2,18 @@ import * as vscode from 'vscode';
 import { initConfig, isConfigured, getConfig } from './config';
 import { initCache, clearAll as clearCache } from './localCache';
 import { initStatusBar, setConnected, setDisconnected, dispose as disposeStatusBar } from './statusBar';
-import { onFileSaved, onFileCreated, onFileDeleted, onFileRenamed, resetStagedCount } from './fileWatcher';
 import { SetupPanel } from './setupPanel';
 import { getVersion, healthCheck } from './api';
-import { StagedFilesProvider, StagedFileItem, StagedFile, showStagedDiff } from './stagedFilesProvider';
+import {
+  GitPhoneSidebarProvider,
+  FileItem,
+  showFileDiff,
+  syncStagedToBackend,
+} from './stagedFilesProvider';
 import axios from 'axios';
 
-// ── Global provider instance (shared between commands) ─────────────────────
-let stagedFilesProvider: StagedFilesProvider;
+// ── Global provider instance ─────────────────────────────────────────────────
+let sidebarProvider: GitPhoneSidebarProvider;
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   console.log('[GitPhone] Extension activating...');
@@ -20,23 +24,26 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   initStatusBar();
 
   // ── Sidebar TreeView ──────────────────────────────────────────────────────
-  stagedFilesProvider = new StagedFilesProvider();
+  sidebarProvider = new GitPhoneSidebarProvider();
   const treeView = vscode.window.createTreeView('gitphone.stagedFiles', {
-    treeDataProvider: stagedFilesProvider,
+    treeDataProvider: sidebarProvider,
     showCollapseAll: false,
   });
   context.subscriptions.push(treeView);
-  context.subscriptions.push({ dispose: () => stagedFilesProvider.dispose() });
+  context.subscriptions.push({ dispose: () => sidebarProvider.dispose() });
 
-  // Update tree view title + Activity Bar badge with staged count
-  stagedFilesProvider.onDidChangeTreeData(() => {
-    const count = stagedFilesProvider.stagedCount;
-    treeView.title = count > 0 ? `Staged Files (${count})` : 'Staged Files';
-    // Badge on Activity Bar icon
-    treeView.badge = count > 0
-      ? { tooltip: `${count} file${count === 1 ? '' : 's'} staged`, value: count }
+  // Badge = staged + changed count (fires every time git state changes)
+  sidebarProvider.onDidChangeTreeData(() => {
+    const staged  = sidebarProvider.stagedChanges.length;
+    const changed = sidebarProvider.workingTreeChanges.length;
+    const total   = staged + changed;
+    treeView.title = total > 0
+      ? `Source Control (${staged}S ${changed}M)`
+      : 'Source Control';
+    treeView.badge = total > 0
+      ? { tooltip: `${staged} staged, ${changed} changed`, value: total }
       : undefined;
-    setConnected(count);
+    setConnected(staged);
   });
 
   // ── Register commands ─────────────────────────────────────────────────────
@@ -56,17 +63,53 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       }
     }),
 
-    // Clear cache
+    // Refresh sidebar manually
+    vscode.commands.registerCommand('gitphone.refreshStagedFiles', () => {
+      sidebarProvider.refresh();
+    }),
+
+    // Stage a file from the CHANGES section (click + icon)
+    vscode.commands.registerCommand('gitphone.stageFile', async (item: FileItem) => {
+      if (!item?.change || !sidebarProvider.repository) return;
+      try {
+        await sidebarProvider.repository.add([item.change.uri]);
+        // git API fires onDidChange → sidebar updates automatically
+      } catch (err: any) {
+        vscode.window.showErrorMessage(`Failed to stage: ${err.message}`);
+      }
+    }),
+
+    // Unstage a file from the STAGED section (click - icon)
+    vscode.commands.registerCommand('gitphone.unstageFile', async (item: FileItem) => {
+      if (!item?.change || !sidebarProvider.repository) return;
+      try {
+        await sidebarProvider.repository.revert([item.change.uri]);
+      } catch (err: any) {
+        vscode.window.showErrorMessage(`Failed to unstage: ${err.message}`);
+      }
+    }),
+
+    // Show diff when clicking a file
+    vscode.commands.registerCommand('gitphone.showFileDiff', async (
+      change: any, section: any, repoRoot: string
+    ) => {
+      await showFileDiff(change, section, repoRoot);
+    }),
+
+    // Sync STAGED files to GitPhone backend → appear in Telegram /files
+    vscode.commands.registerCommand('gitphone.syncToTelegram', async () => {
+      await syncStagedToBackend(sidebarProvider, context);
+    }),
+
+    // Clear local cache
     vscode.commands.registerCommand('gitphone.clearCache', async () => {
       const confirm = await vscode.window.showWarningMessage(
-        'Clear GitPhone local cache? This will reset all cached file SHAs.',
+        'Clear GitPhone local cache? This resets all cached file SHAs.',
         'Clear Cache',
         'Cancel',
       );
       if (confirm === 'Clear Cache') {
         clearCache();
-        resetStagedCount(0);
-        stagedFilesProvider.refresh();
         vscode.window.showInformationMessage('GitPhone cache cleared.');
       }
     }),
@@ -76,112 +119,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       showStatusMenu();
     }),
 
-    // ── Sidebar commands ──────────────────────────────────────────────────
-
-    // Refresh button in sidebar title bar
-    vscode.commands.registerCommand('gitphone.refreshStagedFiles', () => {
-      stagedFilesProvider.refresh();
-      vscode.window.setStatusBarMessage('$(sync~spin) GitPhone: Refreshing...', 2000);
-    }),
-
-    // Unstage a file (remove from staged)
-    vscode.commands.registerCommand('gitphone.unstageFile', async (item: StagedFileItem) => {
-      if (!item?.file) return;
-      const config = getConfig();
-      if (!config) return;
-
-      const confirm = await vscode.window.showWarningMessage(
-        `Unstage "${item.file.filepath}"?`,
-        'Unstage',
-        'Cancel',
-      );
-      if (confirm !== 'Unstage') return;
-
-      try {
-        await axios.delete(
-          `${config.backendUrl}/staged-files/${item.file.id}`,
-          {
-            timeout: 8_000,
-            headers: {
-              'X-Telegram-Id': config.telegramId,
-              'X-Api-Key': config.apiKey ?? '',
-            },
-          },
-        );
-        stagedFilesProvider.removeFile(item.file.id);
-        vscode.window.showInformationMessage(`Unstaged: ${item.file.filepath}`);
-      } catch {
-        vscode.window.showErrorMessage('Failed to unstage file. Try again.');
-      }
-    }),
-
-    // ── Show diff when clicking a staged file ─────────────────────────────────
-    vscode.commands.registerCommand('gitphone.showDiff', async (file: StagedFile) => {
-      await showStagedDiff(file, context);
-    }),
-
-    // ── Direct Commit from Extension ──────────────────────────────────
-    vscode.commands.registerCommand('gitphone.commitAll', async () => {
-      await directCommit(context, stagedFilesProvider, null);
-    }),
-
-    // Commit a single specific file (right-click → Commit This File)
-    vscode.commands.registerCommand('gitphone.commitFile', async (item: StagedFileItem) => {
-      if (!item?.file) return;
-      await directCommit(context, stagedFilesProvider, item.file);
-    }),
-
-    // ── Clear all stale staged files ───────────────────────────────────
-    vscode.commands.registerCommand('gitphone.clearStagedFiles', async () => {
-      const config = getConfig();
-      if (!config) return;
-      const files = stagedFilesProvider.stagedFiles;
-      if (files.length === 0) {
-        vscode.window.showInformationMessage('No staged files to clear.');
-        return;
-      }
-      const confirm = await vscode.window.showWarningMessage(
-        `Clear all ${files.length} staged file(s)?\nThis removes them from the staging queue only — your actual files are safe.`,
-        { modal: true },
-        'Clear All',
-      );
-      if (confirm !== 'Clear All') return;
-
-      try {
-        await axios.post(
-          `${config.backendUrl}/staged-files/clear-all`,
-          {},
-          {
-            timeout: 8_000,
-            headers: {
-              'X-Telegram-Id': config.telegramId,
-              'X-Api-Key': config.apiKey ?? '',
-            },
-          },
-        );
-        stagedFilesProvider.clearAll();
-        resetStagedCount(0);
-        vscode.window.showInformationMessage('✅ Staged files cleared.');
-      } catch {
-        // Fallback: clear locally even if backend fails
-        stagedFilesProvider.clearAll();
-        resetStagedCount(0);
-        vscode.window.showInformationMessage('Cleared locally. Backend may still have entries.');
-      }
-    }),
-
-    // Manually force-stage the current open file
-    vscode.commands.registerCommand('gitphone.stageCurrentFile', async () => {
-      const editor = vscode.window.activeTextEditor;
-      if (!editor) {
-        vscode.window.showWarningMessage('No file is currently open.');
-        return;
-      }
-      await onFileSaved(editor.document);
-      setTimeout(() => stagedFilesProvider.refresh(), 1000);
-    }),
-
-    // Diagnose — shows exactly what's wrong
+    // Diagnose
     vscode.commands.registerCommand('gitphone.diagnose', async () => {
       const config = getConfig();
       const lines: string[] = ['\n=== GitPhone Diagnostics ===\n'];
@@ -196,7 +134,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       lines.push(`✅ Repo         : ${config.defaultRepo}`);
       lines.push(`✅ Branch       : ${config.branch}`);
       lines.push(`✅ Backend URL  : ${config.backendUrl}`);
-      lines.push(`✅ Has PAT      : ${config.githubToken ? 'yes (' + config.githubToken.slice(0, 8) + '...)' : 'NO - MISSING'}`);
+
+      const repo = sidebarProvider.repository;
+      lines.push(`✅ Git repo     : ${repo?.rootUri.fsPath ?? 'NOT FOUND'}`);
+      lines.push(`✅ Staged       : ${sidebarProvider.stagedChanges.length} file(s)`);
+      lines.push(`✅ Changed      : ${sidebarProvider.workingTreeChanges.length} file(s)`);
 
       try {
         const health = await axios.get(`${config.backendUrl}/health`, { timeout: 8000 });
@@ -205,80 +147,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         lines.push(`❌ Backend UNREACHABLE: ${e.message}`);
       }
 
-      try {
-        const staged = await axios.get(`${config.backendUrl}/staged-files/${config.telegramId}`, { timeout: 8000 });
-        lines.push(`✅ Staged files API: ${JSON.stringify(staged.data)}`);
-      } catch (e: any) {
-        lines.push(`❌ Staged files API FAILED: ${e.message} - ${e.response?.data?.detail}`);
-      }
-
-      // Test sync with a dummy payload
-      try {
-        const testResp = await axios.post(`${config.backendUrl}/sync-file`, {
-          telegram_id: config.telegramId,
-          filepath: '__gitphone_test__.txt',
-          diff: '@@ -0,0 +1 @@\n+test\n',
-          full_content: null,
-          base_sha: 'new_file',
-          is_binary: false,
-          file_size: 4,
-        }, { timeout: 8000 });
-        lines.push(`✅ Sync-file API: ${JSON.stringify(testResp.data)}`);
-      } catch (e: any) {
-        lines.push(`❌ Sync-file API FAILED: ${e.message} - ${JSON.stringify(e.response?.data)}`);
-      }
-
       const output = lines.join('\n');
       console.log(output);
-
-      // Show result in output channel
       const channel = vscode.window.createOutputChannel('GitPhone Diagnostics');
       channel.appendLine(output);
       channel.show();
     }),
   );
 
-  // ── File Watchers ─────────────────────────────────────────────────────────
-
-  // 1. Modified files (saved in editor)
-  const saveListener = vscode.workspace.onDidSaveTextDocument(async (document) => {
-    await onFileSaved(document);
-    setTimeout(() => stagedFilesProvider.refresh(), 1500);
-  });
-  context.subscriptions.push(saveListener);
-
-  // 2. Newly created files (created via file explorer, terminal, or Ctrl+N → Save)
-  const createListener = vscode.workspace.onDidCreateFiles(async (event) => {
-    for (const uri of event.files) {
-      await onFileCreated(uri);
-    }
-    setTimeout(() => stagedFilesProvider.refresh(), 1500);
-  });
-  context.subscriptions.push(createListener);
-
-  // 3. Deleted files — stage as deletion so the bot can push the delete to GitHub
-  const deleteListener = vscode.workspace.onDidDeleteFiles(async (event) => {
-    for (const uri of event.files) {
-      await onFileDeleted(uri);
-    }
-    setTimeout(() => stagedFilesProvider.refresh(), 1500);
-  });
-  context.subscriptions.push(deleteListener);
-
-  // 4. Renamed files = delete old path + create new path
-  const renameListener = vscode.workspace.onDidRenameFiles(async (event) => {
-    for (const { oldUri, newUri } of event.files) {
-      await onFileDeleted(oldUri);   // old path becomes a deletion
-      await onFileCreated(newUri);   // new path becomes a creation
-    }
-    setTimeout(() => stagedFilesProvider.refresh(), 1500);
-  });
-  context.subscriptions.push(renameListener);
-
   // ── Startup logic ─────────────────────────────────────────────────────────
   if (isConfigured()) {
     await onStartupConfigured(context);
-    stagedFilesProvider.refresh();
   } else {
     setDisconnected();
     const choice = await vscode.window.showInformationMessage(
@@ -297,12 +176,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
 /**
  * Runs when extension starts and is already configured.
- * Checks backend health and shows staged count.
  */
 async function onStartupConfigured(context: vscode.ExtensionContext): Promise<void> {
   const config = getConfig()!;
 
-  // Quick health check
   const healthy = await healthCheck();
   if (!healthy) {
     setDisconnected();
@@ -313,10 +190,7 @@ async function onStartupConfigured(context: vscode.ExtensionContext): Promise<vo
     return;
   }
 
-  // Schema version check (non-blocking)
   checkSchemaVersion().catch(console.error);
-
-  // Start with 0 — the status bar updates on next file save
   setConnected(0);
 }
 
@@ -359,11 +233,19 @@ async function showStatusMenu(): Promise<void> {
   const config = getConfig();
   if (!config) return;
 
+  const staged  = sidebarProvider.stagedChanges.length;
+  const changed = sidebarProvider.workingTreeChanges.length;
+
   const items = [
     {
       label: '$(info) GitPhone Status',
-      description: `${config.defaultRepo} • ${config.branch}`,
+      description: `${config.defaultRepo} • ${config.branch} — ${staged}S ${changed}M`,
       action: 'status',
+    },
+    {
+      label: '$(cloud-upload) Sync staged files to Telegram',
+      description: `Push ${staged} staged file(s) to /files`,
+      action: 'sync',
     },
     {
       label: '$(gear) Open Setup',
@@ -384,6 +266,9 @@ async function showStatusMenu(): Promise<void> {
   if (!selected) return;
 
   switch (selected.action) {
+    case 'sync':
+      vscode.commands.executeCommand('gitphone.syncToTelegram');
+      break;
     case 'setup':
       SetupPanel.createOrShow(vscode.Uri.parse(''));
       break;
@@ -396,98 +281,6 @@ async function showStatusMenu(): Promise<void> {
       );
       break;
   }
-}
-
-
-/**
- * Direct commit from the extension — no Telegram needed.
- * Asks for a commit message then calls /commit-direct on the backend.
- * If singleFile is provided, only that file is committed.
- */
-async function directCommit(
-  context: vscode.ExtensionContext,
-  provider: StagedFilesProvider,
-  singleFile: import('./stagedFilesProvider').StagedFile | null,
-): Promise<void> {
-  const config = getConfig();
-  if (!config) {
-    vscode.window.showWarningMessage('GitPhone not configured. Open Setup first.');
-    return;
-  }
-
-  const files = singleFile ? [singleFile] : provider.stagedFiles;
-  if (files.length === 0) {
-    vscode.window.showInformationMessage('No staged files to commit.');
-    return;
-  }
-
-  // Show file list in input prompt
-  const fileList = files.slice(0, 5).map(f => {
-    const icon = f.change_type === 'create' ? '➕' : f.change_type === 'delete' ? '🗑️' : '✏️';
-    return `${icon} ${f.filepath}`;
-  }).join(', ') + (files.length > 5 ? ` +${files.length - 5} more` : '');
-
-  const message = await vscode.window.showInputBox({
-    prompt: `Commit message for: ${fileList}`,
-    placeHolder: 'e.g. fix: update login logic',
-    validateInput: (v) => v.trim() ? null : 'Commit message cannot be empty',
-  });
-
-  if (!message) return; // User cancelled
-
-  await vscode.window.withProgress(
-    {
-      location: vscode.ProgressLocation.Notification,
-      title: '📱 GitPhone: Committing...',
-      cancellable: false,
-    },
-    async (progress) => {
-      progress.report({ message: `Pushing ${files.length} file(s) to GitHub...` });
-
-      try {
-        const fileIds = files.map(f => f.id);
-        const response = await axios.post(
-          `${config.backendUrl}/commit-direct`,
-          {
-            telegram_id: config.telegramId,
-            file_ids: fileIds,
-            commit_message: message,
-          },
-          {
-            timeout: 30_000,
-            headers: {
-              'X-Telegram-Id': config.telegramId,
-              'X-Api-Key': config.apiKey ?? '',
-            },
-          }
-        );
-
-        const data = response.data;
-        if (data.ok) {
-          const sha = data.commit_sha?.slice(0, 7) ?? 'done';
-          // Remove committed files from sidebar
-          for (const f of files) {
-            provider.removeFile(f.id);
-          }
-
-          const action = await vscode.window.showInformationMessage(
-            `✅ Committed! [${sha}] — "${message}"`,
-            'View on GitHub',
-          );
-          if (action === 'View on GitHub' && data.commit_url) {
-            vscode.env.openExternal(vscode.Uri.parse(data.commit_url));
-          }
-        } else {
-          vscode.window.showErrorMessage(
-            `❌ Commit failed: ${data.message ?? 'Unknown error'}`,
-          );
-        }
-      } catch (err: any) {
-        const detail = err?.response?.data?.detail ?? err?.message ?? 'Unknown error';
-        vscode.window.showErrorMessage(`❌ GitPhone commit failed: ${detail}`);
-      }
-    }
-  );
 }
 
 

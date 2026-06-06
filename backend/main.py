@@ -19,7 +19,7 @@ from bot import (
     status_handler,
     help_handler,
     cancel_handler,
-    repo_handler,
+    set_repo_handler,
     preview_handler,
     unstage_handler,
     clear_handler,
@@ -53,7 +53,7 @@ telegram_app.add_handler(CommandHandler("log", log_handler))
 telegram_app.add_handler(CommandHandler("status", status_handler))
 telegram_app.add_handler(CommandHandler("help", help_handler))
 telegram_app.add_handler(CommandHandler("cancel", cancel_handler))
-telegram_app.add_handler(CommandHandler("repo", repo_handler))
+telegram_app.add_handler(CommandHandler("repo", set_repo_handler))
 telegram_app.add_handler(CommandHandler("preview", preview_handler))
 telegram_app.add_handler(CommandHandler("unstage", unstage_handler))
 telegram_app.add_handler(CommandHandler("clear", clear_handler))
@@ -121,12 +121,14 @@ from routes.sync import router as sync_router
 from routes.version import router as version_router
 from routes.staged_files import router as staged_files_router
 from routes.unstage import router as unstage_router
+from routes.auth import router as auth_router
 
 app.include_router(register_router)
 app.include_router(sync_router)
 app.include_router(version_router)
 app.include_router(staged_files_router)
 app.include_router(unstage_router)
+app.include_router(auth_router)
 
 
 # ── Health Check ─────────────────────────────────────────────────────────────

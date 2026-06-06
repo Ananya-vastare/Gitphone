@@ -2,7 +2,7 @@
   "name": "gitphone",
   "displayName": "GitPhone",
   "description": "Commit to GitHub from anywhere — stage in VS Code, commit via Telegram bot",
-  "version": "1.4.2",
+  "version": "1.5.0",
   "publisher": "ankittroy-21",
   "license": "SEE LICENSE IN LICENSE",
   "homepage": "https://github.com/ankittroy-21/gitphone#readme",
@@ -16,6 +16,9 @@
   "engines": {
     "vscode": "^1.85.0"
   },
+  "extensionDependencies": [
+    "vscode.git"
+  ],
   "categories": [
     "Other",
     "SCM Providers"
@@ -53,7 +56,7 @@
       "gitphone-sidebar": [
         {
           "id": "gitphone.stagedFiles",
-          "name": "Staged Files",
+          "name": "Source Control",
           "when": "true"
         }
       ]
@@ -82,19 +85,14 @@
         "icon": "$(refresh)"
       },
       {
-        "command": "gitphone.commitAll",
-        "title": "Commit All Staged Files",
+        "command": "gitphone.syncToTelegram",
+        "title": "Send to Telegram /files",
         "icon": "$(cloud-upload)"
       },
       {
-        "command": "gitphone.commitFile",
-        "title": "Commit This File",
-        "icon": "$(cloud-upload)"
-      },
-      {
-        "command": "gitphone.clearStagedFiles",
-        "title": "Clear All Staged",
-        "icon": "$(clear-all)"
+        "command": "gitphone.stageFile",
+        "title": "Stage File",
+        "icon": "$(add)"
       },
       {
         "command": "gitphone.unstageFile",
@@ -102,14 +100,9 @@
         "icon": "$(remove)"
       },
       {
-        "command": "gitphone.showDiff",
+        "command": "gitphone.showFileDiff",
         "title": "Show Diff",
         "icon": "$(diff)"
-      },
-      {
-        "command": "gitphone.stageCurrentFile",
-        "title": "GitPhone: Stage Current File Now",
-        "icon": "$(cloud-upload)"
       },
       {
         "command": "gitphone.diagnose",
@@ -120,7 +113,7 @@
     "menus": {
       "view/title": [
         {
-          "command": "gitphone.commitAll",
+          "command": "gitphone.syncToTelegram",
           "when": "view == gitphone.stagedFiles",
           "group": "navigation@1"
         },
@@ -130,31 +123,21 @@
           "group": "navigation@2"
         },
         {
-          "command": "gitphone.clearStagedFiles",
-          "when": "view == gitphone.stagedFiles",
-          "group": "navigation@3"
-        },
-        {
           "command": "gitphone.openSetup",
           "when": "view == gitphone.stagedFiles",
-          "group": "navigation@4"
+          "group": "navigation@3"
         }
       ],
       "view/item/context": [
         {
-          "command": "gitphone.commitFile",
-          "when": "viewItem == stagedFile",
+          "command": "gitphone.unstageFile",
+          "when": "view == gitphone.stagedFiles && viewItem == stagedFile",
           "group": "inline@1"
         },
         {
-          "command": "gitphone.showDiff",
-          "when": "viewItem == stagedFile",
-          "group": "inline@2"
-        },
-        {
-          "command": "gitphone.unstageFile",
-          "when": "viewItem == stagedFile",
-          "group": "inline@3"
+          "command": "gitphone.stageFile",
+          "when": "view == gitphone.stagedFiles && viewItem == changedFile",
+          "group": "inline@1"
         }
       ]
     }

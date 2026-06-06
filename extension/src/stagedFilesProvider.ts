@@ -171,7 +171,13 @@ export class StagedFilesProvider implements vscode.TreeDataProvider<vscode.TreeI
     try {
       const response = await axios.get(
         `${config.backendUrl}/staged-files/${config.telegramId}`,
-        { timeout: 8_000 },
+        {
+          timeout: 8_000,
+          headers: {
+            'X-Telegram-Id': config.telegramId,
+            'X-Api-Key': config.apiKey ?? '',
+          },
+        },
       );
       this._stagedFiles = response.data?.files ?? [];
       this._lastRefresh = new Date();

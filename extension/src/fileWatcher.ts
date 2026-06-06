@@ -108,6 +108,7 @@ export async function onFileSaved(document: vscode.TextDocument): Promise<void> 
 
   // ── Step 5: POST to backend ─────────────────────────────────────────────
   setSyncing();
+  console.log(`[GitPhone] Syncing ${relativePath} to ${config.backendUrl}`);
   try {
     await syncFile({
       telegram_id: config.telegramId,
@@ -125,15 +126,20 @@ export async function onFileSaved(document: vscode.TextDocument): Promise<void> 
 
   } catch (err) {
     const message = extractErrorMessage(err);
-    console.error(`[GitPhone] Sync failed: ${message}`);
-
-    // Don't spam the user on every save — just show in status bar
+    console.error(`[GitPhone] Sync failed for ${relativePath}: ${message}`);
     setError(`Sync failed: ${message}`);
 
-    // Restore staged count after 3 seconds
-    setTimeout(() => {
-      setConnected(_stagedCount);
-    }, 3000);
+    // Show a notification so user knows what went wrong
+    vscode.window.showWarningMessage(
+      `GitPhone: Failed to stage "${path.basename(relativePath)}" — ${message}`,
+      'Open Setup',
+    ).then(choice => {
+      if (choice === 'Open Setup') {
+        vscode.commands.executeCommand('gitphone.openSetup');
+      }
+    });
+
+    setTimeout(() => setConnected(_stagedCount), 3000);
   }
 }
 

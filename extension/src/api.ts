@@ -1,10 +1,5 @@
-/**
- * api.ts — All HTTP calls to the GitPhone Render backend.
- * Uses axios for clean async/await error handling.
- */
-
 import axios, { AxiosError } from 'axios';
-import { getBackendUrl } from './config';
+import { getBackendUrl, getConfig } from './config';
 
 export interface RegisterPayload {
   telegram_id: string;
@@ -27,6 +22,7 @@ export interface RegisterResponse {
   ok: boolean;
   message: string;
   telegram_id?: string;
+  api_key?: string;      // Returned once at registration
   error?: string;
 }
 
@@ -47,16 +43,22 @@ function baseUrl(): string {
   return getBackendUrl().replace(/\/$/, '');
 }
 
+/** Headers required for authenticated endpoints */
+function authHeaders(): Record<string, string> {
+  const cfg = getConfig();
+  if (!cfg?.apiKey) return {};
+  return {
+    'X-Telegram-Id': cfg.telegramId,
+    'X-Api-Key': cfg.apiKey,
+  };
+}
+
+// ── Public endpoints (no auth) ───────────────────────────────────────────────
+
 export async function register(payload: RegisterPayload): Promise<RegisterResponse> {
   const response = await axios.post<RegisterResponse>(`${baseUrl()}/register`, payload, {
     timeout: 15000,
-  });
-  return response.data;
-}
-
-export async function syncFile(payload: SyncFilePayload): Promise<SyncFileResponse> {
-  const response = await axios.post<SyncFileResponse>(`${baseUrl()}/sync-file`, payload, {
-    timeout: 10000,
+    // No auth headers — this is the endpoint that creates the key
   });
   return response.data;
 }
@@ -76,6 +78,17 @@ export async function healthCheck(): Promise<boolean> {
     return false;
   }
 }
+
+// ── Authenticated endpoints (require X-Telegram-Id + X-Api-Key) ─────────────
+
+export async function syncFile(payload: SyncFilePayload): Promise<SyncFileResponse> {
+  const response = await axios.post<SyncFileResponse>(`${baseUrl()}/sync-file`, payload, {
+    timeout: 10000,
+    headers: authHeaders(),
+  });
+  return response.data;
+}
+
 
 /**
  * Extract a human-readable error message from an axios error.

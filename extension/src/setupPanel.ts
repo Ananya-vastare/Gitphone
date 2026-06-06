@@ -41,25 +41,28 @@ export class SetupPanel {
     this._panel = panel;
     this._panel.webview.html = this._getHtmlContent();
 
-    // Pre-fill with existing config if available
-    const existing = getConfig();
-    if (existing) {
-      this._panel.webview.postMessage({
-        type: 'prefill',
-        data: {
-          telegramId: existing.telegramId,
-          defaultRepo: existing.defaultRepo,
-          branch: existing.branch,
-          backendUrl: existing.backendUrl,
-        },
-      });
-    }
-
     // Listen for messages from the webview
     this._panel.webview.onDidReceiveMessage(
       async (message) => {
-        if (message.type === 'connect') {
+        if (message.type === 'ready') {
+          // Webview signals it's loaded — NOW safe to prefill
+          const existing = getConfig();
+          if (existing) {
+            this._panel.webview.postMessage({
+              type: 'prefill',
+              data: {
+                telegramId: existing.telegramId,
+                githubToken: existing.githubToken,   // ← was missing!
+                defaultRepo: existing.defaultRepo,
+                branch: existing.branch,
+                backendUrl: existing.backendUrl,
+              },
+            });
+          }
+        } else if (message.type === 'connect') {
           await this._handleConnect(message.data);
+        } else if (message.type === 'openLink') {
+          vscode.env.openExternal(vscode.Uri.parse(message.url));
         }
       },
       null,
@@ -87,7 +90,15 @@ export class SetupPanel {
       });
 
       if (response.ok) {
-        // Save config to globalState
+        if (!response.api_key) {
+          this._panel.webview.postMessage({
+            type: 'error',
+            message: 'Server did not return an API key. Please try again or update your backend.',
+          });
+          return;
+        }
+
+        // Save config to globalState — including the api_key
         saveConfig({
           telegramId: data.telegramId,
           githubToken: data.githubToken,
@@ -95,6 +106,7 @@ export class SetupPanel {
           branch: data.branch || 'main',
           backendUrl: data.backendUrl || 'https://gitphone.onrender.com',
           schemaVersion: 1,
+          apiKey: response.api_key,   // Store the secret key
         });
 
         setConnected(0);
@@ -421,6 +433,9 @@ export class SetupPanel {
   <script>
     const vscode = acquireVsCodeApi();
 
+    // Signal extension that webview is ready to receive messages
+    vscode.postMessage({ type: 'ready' });
+
     function openLink(url) {
       vscode.postMessage({ type: 'openLink', url });
     }
@@ -492,6 +507,12 @@ export class SetupPanel {
         if (d.defaultRepo) document.getElementById('defaultRepo').value = d.defaultRepo;
         if (d.branch) document.getElementById('branch').value = d.branch;
         if (d.backendUrl) document.getElementById('backendUrl').value = d.backendUrl;
+        if (d.githubToken) {
+          // Show token as filled but masked — user can clear and retype if needed
+          const tokenInput = document.getElementById('githubToken');
+          tokenInput.value = d.githubToken;
+          tokenInput.placeholder = '•••••••• (saved — clear to change)';
+        }
       }
     });
   </script>

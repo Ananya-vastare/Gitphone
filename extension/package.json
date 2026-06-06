@@ -2,7 +2,7 @@
   "name": "gitphone",
   "displayName": "GitPhone",
   "description": "Commit to GitHub from anywhere — stage in VS Code, commit via Telegram bot",
-  "version": "1.0.0",
+  "version": "1.2.0",
   "publisher": "ankittroy-21",
   "license": "SEE LICENSE IN LICENSE",
   "homepage": "https://github.com/ankittroy-21/gitphone#readme",
@@ -36,7 +36,8 @@
   },
   "main": "./out/extension.js",
   "activationEvents": [
-    "onStartupFinished"
+    "onStartupFinished",
+    "onView:gitphone.stagedFiles"
   ],
   "contributes": {
     "viewsContainers": {
@@ -94,6 +95,11 @@
         "command": "gitphone.stageCurrentFile",
         "title": "GitPhone: Stage Current File Now",
         "icon": "$(cloud-upload)"
+      },
+      {
+        "command": "gitphone.diagnose",
+        "title": "GitPhone: Run Diagnostics",
+        "icon": "$(bug)"
       }
     ],
     "menus": {

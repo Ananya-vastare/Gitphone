@@ -3,14 +3,15 @@ routes/unstage.py — DELETE /staged-files/<file_id>
 Called by the VS Code extension when user clicks Unstage on a file.
 """
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from supabase_service import get_client, get_user_by_telegram_id
+from auth import require_api_key
 
 router = APIRouter()
 
 
 @router.delete("/staged-files/{file_id}")
-async def unstage_file(file_id: str):
+async def unstage_file(file_id: str, _auth: str = Depends(require_api_key)):
     """Remove a staged file by its UUID (marks as cancelled)."""
     try:
         db = get_client()

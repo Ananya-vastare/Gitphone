@@ -2,12 +2,14 @@
 routes/register.py — POST /register
 Called by the VS Code extension during first-time setup.
 Validates GitHub token + repo access, then saves user to Supabase.
+Generates a per-user API key returned ONCE — extension stores it for all future requests.
 """
 
 from fastapi import APIRouter, HTTPException
 from models.user import RegisterPayload, UserResponse
 from github_service import github_service
 from supabase_service import upsert_user
+from auth import generate_api_key
 
 router = APIRouter()
 
@@ -24,12 +26,16 @@ async def register(payload: RegisterPayload):
             message = gh_result.get("message", "GitHub validation failed")
             raise HTTPException(status_code=400, detail={"error": error, "message": message})
 
-        # Step 2: Upsert user record in Supabase
+        # Step 2: Generate API key (raw returned to client, hash stored in DB)
+        raw_key, hashed_key = generate_api_key()
+
+        # Step 3: Upsert user record in Supabase
         user_data = {
             "telegram_id": payload.telegram_id,
-            "github_token": payload.github_token,  # MVP: plain text (AES-256 post MVP)
+            "github_token": payload.github_token,
             "default_repo": payload.default_repo,
             "branch": payload.branch or gh_result.get("default_branch", "main"),
+            "api_key_hash": hashed_key,   # Never store the raw key
         }
         saved = upsert_user(user_data)
         if not saved:
@@ -39,6 +45,7 @@ async def register(payload: RegisterPayload):
             ok=True,
             message="Registered successfully",
             telegram_id=payload.telegram_id,
+            api_key=raw_key,   # Sent ONCE — extension must store this securely
         )
 
     except HTTPException:

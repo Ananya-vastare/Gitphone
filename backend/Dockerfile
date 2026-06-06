@@ -25,6 +25,7 @@ ENV PATH="/opt/venv/bin:$PATH"
 COPY main.py             .
 COPY bot.py              .
 COPY admin.py            .
+COPY auth.py             .
 COPY channel_logger.py   .
 COPY github_service.py   .
 COPY diff_service.py     .

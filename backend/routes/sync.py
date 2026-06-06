@@ -4,10 +4,11 @@ Called by VS Code extension on every file save.
 Stores the diff in Supabase staged_files.
 """
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from models.staged import SyncFilePayload, SyncFileResponse
 from supabase_service import get_user_by_telegram_id, upsert_staged_file, update_last_active
 import channel_logger
+from auth import require_api_key
 
 MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
 
@@ -15,7 +16,7 @@ router = APIRouter()
 
 
 @router.post("/sync-file", response_model=SyncFileResponse)
-async def sync_file(payload: SyncFilePayload):
+async def sync_file(payload: SyncFilePayload, _auth: str = Depends(require_api_key)):
     try:
         # Step 1: Resolve user
         user = get_user_by_telegram_id(payload.telegram_id)

@@ -3,14 +3,15 @@ routes/staged_files.py — GET /staged-files/<telegram_id>
 Called by the VS Code extension sidebar to list pending staged files.
 """
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from supabase_service import get_user_by_telegram_id, get_pending_files
+from auth import require_api_key
 
 router = APIRouter()
 
 
 @router.get("/staged-files/{telegram_id}")
-async def list_staged_files(telegram_id: str):
+async def list_staged_files(telegram_id: str, _auth: str = Depends(require_api_key)):
     """Return all pending staged files for the extension sidebar."""
     user = get_user_by_telegram_id(telegram_id)
     if not user:

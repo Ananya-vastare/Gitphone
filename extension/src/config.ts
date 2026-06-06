@@ -12,6 +12,7 @@ export interface GitPhoneConfig {
   branch: string;
   backendUrl: string;
   schemaVersion: number;
+  apiKey: string;   // Per-user secret — sent as X-Api-Key header on all requests
 }
 
 const CONFIG_KEY = 'gitphone_config';
@@ -41,7 +42,8 @@ export function isConfigured(): boolean {
     cfg.telegramId &&
     cfg.githubToken &&
     cfg.defaultRepo &&
-    cfg.backendUrl
+    cfg.backendUrl &&
+    cfg.apiKey
   );
 }
 

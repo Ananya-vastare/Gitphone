@@ -4,7 +4,7 @@ import { initCache, clearAll as clearCache } from './localCache';
 import { initStatusBar, setConnected, setDisconnected, dispose as disposeStatusBar } from './statusBar';
 import { onFileSaved, resetStagedCount } from './fileWatcher';
 import { SetupPanel } from './setupPanel';
-import { getVersion, healthCheck } from './api';
+import { getVersion, healthCheck, syncFile } from './api';
 import { StagedFilesProvider, StagedFileItem } from './stagedFilesProvider';
 import axios from 'axios';
 
@@ -96,7 +96,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       try {
         await axios.delete(
           `${config.backendUrl}/staged-files/${item.file.id}`,
-          { timeout: 8_000 },
+          {
+            timeout: 8_000,
+            headers: {
+              'X-Telegram-Id': config.telegramId,
+              'X-Api-Key': config.apiKey ?? '',
+            },
+          },
         );
         stagedFilesProvider.removeFile(item.file.id);
         vscode.window.showInformationMessage(`Unstaged: ${item.file.filepath}`);
@@ -131,6 +137,62 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       }
       await onFileSaved(editor.document);
       setTimeout(() => stagedFilesProvider.refresh(), 1000);
+    }),
+
+    // Diagnose — shows exactly what's wrong
+    vscode.commands.registerCommand('gitphone.diagnose', async () => {
+      const config = getConfig();
+      const lines: string[] = ['\n=== GitPhone Diagnostics ===\n'];
+
+      if (!config) {
+        lines.push('❌ NOT CONFIGURED - run Connect GitPhone first');
+        vscode.window.showErrorMessage('GitPhone not configured. Open Setup first.');
+        return;
+      }
+
+      lines.push(`✅ Telegram ID : ${config.telegramId}`);
+      lines.push(`✅ Repo         : ${config.defaultRepo}`);
+      lines.push(`✅ Branch       : ${config.branch}`);
+      lines.push(`✅ Backend URL  : ${config.backendUrl}`);
+      lines.push(`✅ Has PAT      : ${config.githubToken ? 'yes (' + config.githubToken.slice(0, 8) + '...)' : 'NO - MISSING'}`);
+
+      try {
+        const health = await axios.get(`${config.backendUrl}/health`, { timeout: 8000 });
+        lines.push(`✅ Backend health: ${JSON.stringify(health.data)}`);
+      } catch (e: any) {
+        lines.push(`❌ Backend UNREACHABLE: ${e.message}`);
+      }
+
+      try {
+        const staged = await axios.get(`${config.backendUrl}/staged-files/${config.telegramId}`, { timeout: 8000 });
+        lines.push(`✅ Staged files API: ${JSON.stringify(staged.data)}`);
+      } catch (e: any) {
+        lines.push(`❌ Staged files API FAILED: ${e.message} - ${e.response?.data?.detail}`);
+      }
+
+      // Test sync with a dummy payload
+      try {
+        const testResp = await axios.post(`${config.backendUrl}/sync-file`, {
+          telegram_id: config.telegramId,
+          filepath: '__gitphone_test__.txt',
+          diff: '@@ -0,0 +1 @@\n+test\n',
+          full_content: null,
+          base_sha: 'new_file',
+          is_binary: false,
+          file_size: 4,
+        }, { timeout: 8000 });
+        lines.push(`✅ Sync-file API: ${JSON.stringify(testResp.data)}`);
+      } catch (e: any) {
+        lines.push(`❌ Sync-file API FAILED: ${e.message} - ${JSON.stringify(e.response?.data)}`);
+      }
+
+      const output = lines.join('\n');
+      console.log(output);
+
+      // Show result in output channel
+      const channel = vscode.window.createOutputChannel('GitPhone Diagnostics');
+      channel.appendLine(output);
+      channel.show();
     }),
   );
 

@@ -995,6 +995,9 @@ async def commit_now_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
     active_repo   = user.get("active_repo") or user.get("default_repo")
     # Use the branch selected in the branch picker (if any), else user's active branch
     active_branch = context.user_data.get("commit_branch") or user.get("active_branch") or user.get("branch", "main")
+    
+    # Fetch default branch to know if we need a PR
+    default_branch = github_service.get_default_branch(user["github_token"], active_repo)
 
     selected: set = context.user_data.get("selected_files", set())
     staged_data: dict = context.user_data.get("staged_data", {})

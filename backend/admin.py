@@ -1,15 +1,15 @@
 """
-admin.py — Admin-only Telegram bot commands for GitPhone.
+admin.py - Admin-only Telegram bot commands for GitPhone.
 Only works for ADMIN_TELEGRAM_ID set in environment variables.
 
 Commands:
-  /admin_stats     — Global platform stats
-  /admin_users     — List all registered users
-  /admin_user <id> — Inspect a specific user by telegram_id
-  /admin_ban <id>  — Ban a user (marks status = banned)
-  /admin_unban <id>— Unban a user (marks status = active)
-  /admin_broadcast — Broadcast message to all active users
-  /admin_ping      — Backend health check
+  /admin_stats     - Global platform stats
+  /admin_users     - List all registered users
+  /admin_user <id> - Inspect a specific user by telegram_id
+  /admin_ban <id>  - Ban a user (marks status = banned)
+  /admin_unban <id>- Unban a user (marks status = active)
+  /admin_broadcast - Broadcast message to all active users
+  /admin_ping      - Backend health check
 """
 
 import os
@@ -26,7 +26,7 @@ from supabase_service import (
 )
 import channel_logger
 
-# ── Admin Guard ───────────────────────────────────────────────────────────────
+# --- Admin Guard ----------------------------------------------------------------------------------------------
 
 def get_admin_ids() -> set[str]:
     """Returns set of admin telegram IDs from env var (comma-separated)."""
@@ -39,18 +39,18 @@ def is_admin(telegram_id: str) -> bool:
 
 
 def admin_only(func):
-    """Decorator — silently ignores non-admin callers."""
+    """Decorator - silently ignores non-admin callers."""
     @wraps(func)
     async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE, *args, **kwargs):
         caller = str(update.effective_user.id)
         if not is_admin(caller):
-            await update.message.reply_text("❌ Unauthorized.")
+            await update.message.reply_text("[X] Unauthorized.")
             return
         return await func(update, context, *args, **kwargs)
     return wrapper
 
 
-# ── Admin Supabase Queries ────────────────────────────────────────────────────
+# --- Admin Supabase Queries ------------------------------------------------------------------------------
 
 def admin_get_global_stats() -> dict:
     """Pull aggregate stats across all users."""
@@ -73,7 +73,7 @@ def admin_get_global_stats() -> dict:
         for row in (top_committer_res.data or []):
             tid = row["telegram_id"]
             top_map[tid] = top_map.get(tid, 0) + 1
-        top_user = max(top_map, key=top_map.get) if top_map else "—"
+        top_user = max(top_map, key=top_map.get) if top_map else "-"
         top_count = top_map.get(top_user, 0)
 
         return {
@@ -167,7 +167,7 @@ def admin_get_all_active_telegram_ids() -> list[str]:
         return []
 
 
-# ── Helper ────────────────────────────────────────────────────────────────────
+# --- Helper ------------------------------------------------------------------------------------------------------
 
 def _time_ago(iso_str: str) -> str:
     try:
@@ -183,40 +183,40 @@ def _time_ago(iso_str: str) -> str:
 
 
 STATUS_EMOJI = {
-    "active":      "🟢",
-    "inactive_7d": "🟡",
-    "dormant":     "🔴",
-    "banned":      "⛔",
+    "active":      "[OK]",
+    "inactive_7d": "[Wait]",
+    "dormant":     "[Error]",
+    "banned":      "[Banned]",
 }
 
 
-# ── /admin_stats ──────────────────────────────────────────────────────────────
+# --- /admin_stats ---------------------------------------------------------------------------------------------
 
 @admin_only
 async def admin_stats_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.message.reply_text("📊 Fetching global stats...")
+    await update.message.reply_text("[Stats] Fetching global stats...")
     stats = admin_get_global_stats()
     if not stats:
-        await update.message.reply_text("❌ Failed to fetch stats.")
+        await update.message.reply_text("[X] Failed to fetch stats.")
         return
 
     await update.message.reply_text(
-        f"📊 *GitPhone — Global Stats*\n\n"
-        f"👥 *Users*\n"
+        f"[Stats] *GitPhone - Global Stats*\n\n"
+        f"[Users] *Users*\n"
         f"  Total:   `{stats['total_users']}`\n"
-        f"  🟢 Active:  `{stats['active_users']}`\n"
-        f"  🔴 Dormant: `{stats['dormant_users']}`\n"
-        f"  ⛔ Banned:  `{stats['banned_users']}`\n\n"
-        f"📁 *Activity*\n"
+        f"  [OK] Active:  `{stats['active_users']}`\n"
+        f"  [Error] Dormant: `{stats['dormant_users']}`\n"
+        f"  [Banned] Banned:  `{stats['banned_users']}`\n\n"
+        f"[Files] *Activity*\n"
         f"  Staged (pending):  `{stats['staged_total']}`\n"
         f"  Total commits:     `{stats['commits_total']}`\n\n"
-        f"🏆 *Top Committer*\n"
-        f"  `{stats['top_user']}` — `{stats['top_count']}` commits",
+        f"[Top] *Top Committer*\n"
+        f"  `{stats['top_user']}` - `{stats['top_count']}` commits",
         parse_mode=ParseMode.MARKDOWN
     )
 
 
-# ── /admin_users ──────────────────────────────────────────────────────────────
+# --- /admin_users ---------------------------------------------------------------------------------------------
 
 @admin_only
 async def admin_users_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -228,24 +228,24 @@ async def admin_users_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     users = admin_get_all_users(limit=limit, offset=offset)
     if not users:
-        await update.message.reply_text("📭 No users found.")
+        await update.message.reply_text("[Empty] No users found.")
         return
 
-    lines = [f"👥 *All Users* (page {page})\n"]
+    lines = [f"[Users] *All Users* (page {page})\n"]
     for u in users:
-        emoji = STATUS_EMOJI.get(u.get("status", "active"), "❓")
+        emoji = STATUS_EMOJI.get(u.get("status", "active"), "[?]")
         last  = _time_ago(u.get("last_active", ""))
         lines.append(
             f"{emoji} `{u['telegram_id']}`\n"
-            f"   📦 {u.get('default_repo','—')} • {u.get('branch','—')}\n"
-            f"   🕐 {last}"
+            f"   [Repo] {u.get('default_repo','-')} \u2022 {u.get('branch','-')}\n"
+            f"   [Time] {last}"
         )
 
     nav = []
     if page > 1:
-        nav.append(InlineKeyboardButton(f"◀ Page {page-1}", callback_data=f"ADMIN_USERS:{page-1}"))
+        nav.append(InlineKeyboardButton(f"< Page {page-1}", callback_data=f"ADMIN_USERS:{page-1}"))
     if len(users) == limit:
-        nav.append(InlineKeyboardButton(f"Page {page+1} ▶", callback_data=f"ADMIN_USERS:{page+1}"))
+        nav.append(InlineKeyboardButton(f"Page {page+1} >", callback_data=f"ADMIN_USERS:{page+1}"))
 
     markup = InlineKeyboardMarkup([nav]) if nav else None
     await update.message.reply_text(
@@ -265,24 +265,24 @@ async def admin_users_page_callback(update: Update, context: ContextTypes.DEFAUL
 
     users = admin_get_all_users(limit=limit, offset=offset)
     if not users:
-        await query.edit_message_text("📭 No more users.")
+        await query.edit_message_text("[Empty] No more users.")
         return
 
-    lines = [f"👥 *All Users* (page {page})\n"]
+    lines = [f"[Users] *All Users* (page {page})\n"]
     for u in users:
-        emoji = STATUS_EMOJI.get(u.get("status", "active"), "❓")
+        emoji = STATUS_EMOJI.get(u.get("status", "active"), "[?]")
         last  = _time_ago(u.get("last_active", ""))
         lines.append(
             f"{emoji} `{u['telegram_id']}`\n"
-            f"   📦 {u.get('default_repo','—')} • {u.get('branch','—')}\n"
-            f"   🕐 {last}"
+            f"   [Repo] {u.get('default_repo','-')} \u2022 {u.get('branch','-')}\n"
+            f"   [Time] {last}"
         )
 
     nav = []
     if page > 1:
-        nav.append(InlineKeyboardButton(f"◀ Page {page-1}", callback_data=f"ADMIN_USERS:{page-1}"))
+        nav.append(InlineKeyboardButton(f"< Page {page-1}", callback_data=f"ADMIN_USERS:{page-1}"))
     if len(users) == limit:
-        nav.append(InlineKeyboardButton(f"Page {page+1} ▶", callback_data=f"ADMIN_USERS:{page+1}"))
+        nav.append(InlineKeyboardButton(f"Page {page+1} >", callback_data=f"ADMIN_USERS:{page+1}"))
 
     markup = InlineKeyboardMarkup([nav]) if nav else None
     await query.edit_message_text(
@@ -292,7 +292,7 @@ async def admin_users_page_callback(update: Update, context: ContextTypes.DEFAUL
     )
 
 
-# ── /admin_user <telegram_id> ─────────────────────────────────────────────────
+# --- /admin_user <telegram_id> -------------------------------------------------------------------------
 
 @admin_only
 async def admin_user_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -303,36 +303,36 @@ async def admin_user_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
     target_id = context.args[0].strip()
     user = admin_get_user_detail(target_id)
     if not user:
-        await update.message.reply_text(f"❌ No user found with ID `{target_id}`", parse_mode=ParseMode.MARKDOWN)
+        await update.message.reply_text(f"[X] No user found with ID `{target_id}`", parse_mode=ParseMode.MARKDOWN)
         return
 
-    emoji   = STATUS_EMOJI.get(user.get("status", "active"), "❓")
+    emoji   = STATUS_EMOJI.get(user.get("status", "active"), "[?]")
     last    = _time_ago(user.get("last_active", ""))
     created = _time_ago(user.get("created_at", ""))
 
     keyboard = InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("⛔ Ban",   callback_data=f"ADMIN_BAN:{target_id}"),
-            InlineKeyboardButton("✅ Unban", callback_data=f"ADMIN_UNBAN:{target_id}"),
+            InlineKeyboardButton("[Banned] Ban",   callback_data=f"ADMIN_BAN:{target_id}"),
+            InlineKeyboardButton("[OK] Unban", callback_data=f"ADMIN_UNBAN:{target_id}"),
         ]
     ])
 
     await update.message.reply_text(
-        f"👤 *User Detail*\n\n"
+        f"[User] *User Detail*\n\n"
         f"Telegram ID: `{target_id}`\n"
-        f"Status: {emoji} `{user.get('status','—')}`\n"
-        f"Repo: `{user.get('default_repo','—')}` • `{user.get('branch','—')}`\n"
+        f"Status: {emoji} `{user.get('status','-')}`\n"
+        f"Repo: `{user.get('default_repo','-')}` \u2022 `{user.get('branch','-')}`\n"
         f"Last active: `{last}`\n"
         f"Joined: `{created}`\n"
         f"Ping count: `{user.get('ping_count', 0)}`\n\n"
-        f"📁 Staged (pending): `{user['staged_count']}`\n"
-        f"📝 Total commits: `{user['commits_count']}`",
+        f"[Files] Staged (pending): `{user['staged_count']}`\n"
+        f"[Logs] Total commits: `{user['commits_count']}`",
         parse_mode=ParseMode.MARKDOWN,
         reply_markup=keyboard
     )
 
 
-# ── /admin_ban & /admin_unban ─────────────────────────────────────────────────
+# --- /admin_ban & /admin_unban -------------------------------------------------------------------------
 
 @admin_only
 async def admin_ban_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -343,9 +343,9 @@ async def admin_ban_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     ok = admin_set_user_status(target_id, "banned")
     if ok:
         await channel_logger.log_user_banned(str(update.effective_user.id), target_id, "banned")
-        await update.message.reply_text(f"⛔ User `{target_id}` has been *banned*.", parse_mode=ParseMode.MARKDOWN)
+        await update.message.reply_text(f"[Banned] User `{target_id}` has been *banned*.", parse_mode=ParseMode.MARKDOWN)
     else:
-        await update.message.reply_text("❌ Failed to ban user.")
+        await update.message.reply_text("[X] Failed to ban user.")
 
 
 @admin_only
@@ -357,58 +357,58 @@ async def admin_unban_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     ok = admin_set_user_status(target_id, "active")
     if ok:
         await channel_logger.log_user_banned(str(update.effective_user.id), target_id, "unbanned")
-        await update.message.reply_text(f"✅ User `{target_id}` has been *unbanned*.", parse_mode=ParseMode.MARKDOWN)
+        await update.message.reply_text(f"[OK] User `{target_id}` has been *unbanned*.", parse_mode=ParseMode.MARKDOWN)
     else:
-        await update.message.reply_text("❌ Failed to unban user.")
+        await update.message.reply_text("[X] Failed to unban user.")
 
 
 async def admin_ban_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     if not is_admin(str(query.from_user.id)):
-        await query.answer("❌ Unauthorized.", show_alert=True)
+        await query.answer("[X] Unauthorized.", show_alert=True)
         return
     await query.answer()
     target_id = query.data.split(":")[1]
     ok = admin_set_user_status(target_id, "banned")
     if ok:
         await channel_logger.log_user_banned(str(query.from_user.id), target_id, "banned")
-    status_text = f"⛔ Banned `{target_id}`" if ok else "❌ Ban failed"
+    status_text = f"[Banned] Banned `{target_id}`" if ok else "[X] Ban failed"
     await query.edit_message_text(status_text, parse_mode=ParseMode.MARKDOWN)
 
 
 async def admin_unban_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     if not is_admin(str(query.from_user.id)):
-        await query.answer("❌ Unauthorized.", show_alert=True)
+        await query.answer("[X] Unauthorized.", show_alert=True)
         return
     await query.answer()
     target_id = query.data.split(":")[1]
     ok = admin_set_user_status(target_id, "active")
     if ok:
         await channel_logger.log_user_banned(str(query.from_user.id), target_id, "unbanned")
-    status_text = f"✅ Unbanned `{target_id}`" if ok else "❌ Unban failed"
+    status_text = f"[OK] Unbanned `{target_id}`" if ok else "[X] Unban failed"
     await query.edit_message_text(status_text, parse_mode=ParseMode.MARKDOWN)
 
 
-# ── /admin_activity ───────────────────────────────────────────────────────────
+# --- /admin_activity ----------------------------------------------------------------------------------------
 
 @admin_only
 async def admin_activity_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show the most recent commits across ALL users."""
     commits = admin_get_recent_activity(limit=10)
     if not commits:
-        await update.message.reply_text("📭 No commits yet.")
+        await update.message.reply_text("[Empty] No commits yet.")
         return
 
-    lines = ["🕐 *Recent Activity (All Users)*\n"]
+    lines = ["[Time] *Recent Activity (All Users)*\n"]
     for c in commits:
         short_sha = c["commit_sha"][:7]
         time_str  = _time_ago(c.get("committed_at", ""))
         lines.append(
-            f"`{short_sha}` — {time_str}\n"
-            f"   👤 `{c['telegram_id']}`\n"
-            f"   💬 {c['message']}\n"
-            f"   📦 {c.get('repo','—')}"
+            f"`{short_sha}` - {time_str}\n"
+            f"   [User] `{c['telegram_id']}`\n"
+            f"   \U0001f4ac {c['message']}\n"
+            f"   [Repo] {c.get('repo','-')}"
         )
 
     await update.message.reply_text(
@@ -417,7 +417,7 @@ async def admin_activity_handler(update: Update, context: ContextTypes.DEFAULT_T
     )
 
 
-# ── /admin_broadcast ──────────────────────────────────────────────────────────
+# --- /admin_broadcast ---------------------------------------------------------------------------------------
 
 ADMIN_BROADCAST_WAITING = 99
 
@@ -425,7 +425,7 @@ ADMIN_BROADCAST_WAITING = 99
 async def admin_broadcast_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     active_ids = admin_get_all_active_telegram_ids()
     await update.message.reply_text(
-        f"📢 *Broadcast to {len(active_ids)} active users*\n\n"
+        f"[Broadcast] *Broadcast to {len(active_ids)} active users*\n\n"
         f"Type your message below. It will be sent to all active users.\n"
         f"Send /cancel to abort.",
         parse_mode=ParseMode.MARKDOWN
@@ -444,7 +444,7 @@ async def admin_broadcast_send(update: Update, context: ContextTypes.DEFAULT_TYP
         try:
             await context.bot.send_message(
                 chat_id=int(tid),
-                text=f"📢 *Message from GitPhone Team*\n\n{message_text}",
+                text=f"[Broadcast] *Message from GitPhone Team*\n\n{message_text}",
                 parse_mode=ParseMode.MARKDOWN
             )
             sent += 1
@@ -452,7 +452,7 @@ async def admin_broadcast_send(update: Update, context: ContextTypes.DEFAULT_TYP
             failed += 1
 
     await update.message.reply_text(
-        f"✅ Broadcast complete!\n\n"
+        f"[OK] Broadcast complete!\n\n"
         f"Sent:   `{sent}`\n"
         f"Failed: `{failed}`",
         parse_mode=ParseMode.MARKDOWN
@@ -467,7 +467,7 @@ async def admin_broadcast_send(update: Update, context: ContextTypes.DEFAULT_TYP
     return ConversationHandler.END
 
 
-# ── /admin_ping ───────────────────────────────────────────────────────────────
+# --- /admin_ping ----------------------------------------------------------------------------------------------
 
 @admin_only
 async def admin_ping_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -482,35 +482,35 @@ async def admin_ping_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
     elapsed = int((time.time() - start) * 1000)
 
     await update.message.reply_text(
-        f"🏓 *Admin Ping*\n\n"
-        f"Bot: ✅ Online\n"
-        f"DB:  {'✅ OK' if db_ok else '❌ DOWN'}\n"
+        f"[Ping] *Admin Ping*\n\n"
+        f"Bot: [OK] Online\n"
+        f"DB:  {'[OK] OK' if db_ok else '[X] DOWN'}\n"
         f"Latency: `{elapsed}ms`",
         parse_mode=ParseMode.MARKDOWN
     )
 
 
-# ── /admin_help ───────────────────────────────────────────────────────────────
+# --- /admin_help ----------------------------------------------------------------------------------------------
 
 @admin_only
 async def admin_help_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
-        "🔐 *Admin Commands*\n\n"
-        "/admin\\_stats       — Global platform stats\n"
-        "/admin\\_users       — List all users (paginated)\n"
-        "/admin\\_user \\<id\\>  — Inspect a specific user\n"
-        "/admin\\_ban \\<id\\>   — Ban a user\n"
-        "/admin\\_unban \\<id\\> — Unban a user\n"
-        "/admin\\_activity    — Recent commits across all users\n"
-        "/admin\\_broadcast   — Send message to all active users\n"
-        "/admin\\_ping        — Backend + DB health check\n"
-        "/admin\\_help        — This message\n\n"
-        f"🔑 Your admin ID: `{update.effective_user.id}`",
+        "[Admin] *Admin Commands*\n\n"
+        "/admin\\_stats       - Global platform stats\n"
+        "/admin\\_users       - List all users (paginated)\n"
+        "/admin\\_user \\<id\\>  - Inspect a specific user\n"
+        "/admin\\_ban \\<id\\>   - Ban a user\n"
+        "/admin\\_unban \\<id\\> - Unban a user\n"
+        "/admin\\_activity    - Recent commits across all users\n"
+        "/admin\\_broadcast   - Send message to all active users\n"
+        "/admin\\_ping        - Backend + DB health check\n"
+        "/admin\\_help        - This message\n\n"
+        f"[Key] Your admin ID: `{update.effective_user.id}`",
         parse_mode=ParseMode.MARKDOWN
     )
 
 
-# ── Register all admin handlers ───────────────────────────────────────────────
+# --- Register all admin handlers ----------------------------------------------------------------------
 
 def register_admin_handlers(telegram_app) -> None:
     """Call this from main.py to wire up all admin handlers."""

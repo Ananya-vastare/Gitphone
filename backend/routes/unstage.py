@@ -1,5 +1,5 @@
 """
-routes/unstage.py — DELETE /staged-files/<file_id>
+routes/unstage.py - DELETE /staged-files/<file_id>
 Called by the VS Code extension when user clicks Unstage on a file.
 """
 

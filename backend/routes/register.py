@@ -1,8 +1,8 @@
 """
-routes/register.py — POST /register
+routes/register.py - POST /register
 Called by the VS Code extension during first-time setup.
 Validates GitHub token + repo access, then saves user to Supabase.
-Generates a per-user API key returned ONCE — extension stores it for all future requests.
+Generates a per-user API key returned ONCE - extension stores it for all future requests.
 """
 
 from fastapi import APIRouter, HTTPException
@@ -45,7 +45,7 @@ async def register(payload: RegisterPayload):
             ok=True,
             message="Registered successfully",
             telegram_id=payload.telegram_id,
-            api_key=raw_key,   # Sent ONCE — extension must store this securely
+            api_key=raw_key,   # Sent ONCE - extension must store this securely
         )
 
     except HTTPException:

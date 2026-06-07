@@ -45,7 +45,7 @@ class DevicePollRequest(BaseModel):
     telegram_id: str
 
 
-# ── POST /auth/device/start ───────────────────────────────────────────────────
+# --- POST /auth/device/start ---------------------------------------------------
 
 @router.post("/auth/device/start")
 async def device_start(req: DeviceStartRequest):
@@ -96,7 +96,7 @@ async def device_start(req: DeviceStartRequest):
     }
 
 
-# ── POST /auth/device/poll ────────────────────────────────────────────────────
+# --- POST /auth/device/poll ----------------------------------------------------
 
 @router.post("/auth/device/poll")
 async def device_poll(req: DevicePollRequest):

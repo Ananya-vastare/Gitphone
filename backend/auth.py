@@ -1,5 +1,5 @@
 """
-auth.py — API Key authentication middleware for GitPhone backend.
+auth.py - API Key authentication middleware for GitPhone backend.
 
 Every request from the VS Code extension must include:
     X-API-Key: <secret_key>
@@ -13,10 +13,10 @@ Endpoints that require auth:
   DELETE /staged-files/{file_id}
 
 Public endpoints (no auth needed):
-  POST /register    ← generates the key
+  POST /register    \u2190 generates the key
   GET  /health
   GET  /version
-  POST /webhook     ← Telegram webhook (validated by python-telegram-bot)
+  POST /webhook     \u2190 Telegram webhook (validated by python-telegram-bot)
 """
 
 import hashlib
@@ -71,7 +71,7 @@ async def require_api_key(
     x_api_key: str = Header(..., description="Your GitPhone API key"),
 ) -> str:
     """
-    FastAPI dependency — validates X-Telegram-Id + X-Api-Key headers.
+    FastAPI dependency - validates X-Telegram-Id + X-Api-Key headers.
     Raises 401 if invalid. Returns telegram_id on success.
 
     Usage:

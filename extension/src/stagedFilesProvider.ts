@@ -263,7 +263,7 @@ export class GitPhoneSidebarProvider
   }
 }
 
-// ── Commands ──────────────────────────────────────────────────────────────────
+// --- Commands ------------------------------------------------------------------
 
 /**
  * Show a VS Code diff for a file.
@@ -354,13 +354,13 @@ export async function syncStagedToBackend(
       }
 
       vscode.window.showInformationMessage(
-        `\u2705 GitPhone: ${synced} file(s) synced. Use /files in Telegram to commit.`,
+        `[OK] GitPhone: ${synced} file(s) synced. Use /files in Telegram to commit.`,
       );
     },
   );
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+// --- Helpers -------------------------------------------------------------------
 
 function _statusInfo(status: number, section: SectionType): { letter: string; icon: string; color: string } {
   if (section === 'staged') {

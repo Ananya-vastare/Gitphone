@@ -1,28 +1,28 @@
 """
-bot.py — All Telegram bot handlers for GitPhone.
+bot.py - All Telegram bot handlers for GitPhone.
 Uses python-telegram-bot v21 (async, webhook mode).
 
 User Commands:
-  /start   — Register or welcome back (uses Device Flow via /auth)
-  /auth    — GitHub Device Flow login (browser-based, no PAT needed)
-  /files   — Select staged files grouped by repo & commit
-  /log     — Recent commit history
-  /status  — Connection status & repo info
-  /repo    — Show active repo (auto-detected)
-  /branch  — Switch active branch
-  /preview — Preview diffs before committing
-  /unstage — Remove a specific file from staged
-  /clear   — Clear all staged files
-  /cancel  — Cancel current operation
-  /help    — Show all commands
+  /start   - Register or welcome back (uses Device Flow via /auth)
+  /auth    - GitHub Device Flow login (browser-based, no PAT needed)
+  /files   - Select staged files grouped by repo & commit
+  /log     - Recent commit history
+  /status  - Connection status & repo info
+  /repo    - Show active repo (auto-detected)
+  /branch  - Switch active branch
+  /preview - Preview diffs before committing
+  /unstage - Remove a specific file from staged
+  /clear   - Clear all staged files
+  /cancel  - Cancel current operation
+  /help    - Show all commands
 
 Admin Commands (ADMIN_TELEGRAM_IDS env var):
-  /ban <id> [reason]  — Ban a user
-  /unban <id>         — Unban a user
-  /users [page]       — List all users
-  /broadcast <msg>    — Message all users
-  /stats              — Global platform stats
-  /revoke <id>        — Force user to re-authenticate
+  /ban <id> [reason]  - Ban a user
+  /unban <id>         - Unban a user
+  /users [page]       - List all users
+  /broadcast <msg>    - Message all users
+  /stats              - Global platform stats
+  /revoke <id>        - Force user to re-authenticate
 """
 
 import os
@@ -77,7 +77,7 @@ GITHUB_CLIENT_SECRET = os.environ.get("GITHUB_CLIENT_SECRET", "")
 DEVICE_CODE_URL      = "https://github.com/login/device/code"
 TOKEN_URL            = "https://github.com/login/oauth/access_token"
 
-# ── Conversation States ──────────────────────────────────────────────────────
+# --- Conversation States ---------------------------------------------------------------------------------
 WAITING_REPO         = 1
 WAITING_BRANCH_SETUP = 2
 SELECTING_FILES      = 10
@@ -85,16 +85,17 @@ WAITING_MESSAGE      = 11
 CONFIRM_COMMIT       = 12
 SELECTING_BRANCH     = 13   # NEW: branch picker before commit
 WAITING_NEW_BR_NAME  = 14   # NEW: typing new branch name
+WAITING_PROTECTED_BRANCH_NAME = 15  # NEW: typing branch name after protection error
 WAITING_NEW_BRANCH   = 20
 WAITING_AUTH_POLL    = 30   # Device Flow polling state
 
-# ── Admin check ──────────────────────────────────────────────────────────────
+# --- Admin check ---------------------------------------------------------------------------------------------
 def _is_admin(telegram_id: str) -> bool:
     admin_ids = os.environ.get("ADMIN_TELEGRAM_IDS", "").split(",")
     return telegram_id.strip() in [a.strip() for a in admin_ids if a.strip()]
 
 
-# ── Helpers ──────────────────────────────────────────────────────────────────
+# --- Helpers ---------------------------------------------------------------------------------------------------
 
 def _format_file_size(size_bytes: int) -> str:
     if size_bytes < 1024:
@@ -134,11 +135,11 @@ def _build_files_keyboard(staged_files: list[dict], selected: set[str]) -> Inlin
         # Show change type
         change = f.get("change_type", "modify")
         if change == "create":
-            type_icon = "\u2795"   # ➕ new file
+            type_icon = "\u2795"   # \u2795 new file
         elif change == "delete":
-            type_icon = "\U0001f5d1"  # 🗑️ deletion
+            type_icon = "\U0001f5d1"  # [Clear] deletion
         else:
-            type_icon = "\u270f"   # ✏️ modification
+            type_icon = "\u270f"   # \u270f\ufe0f modification
         label = f"{checked} {type_icon} {filepath}" + (f"  {size}" if size != "0B" else "")
         buttons.append([InlineKeyboardButton(label, callback_data=f"FILE_TOGGLE:{file_id}")])
 
@@ -156,13 +157,13 @@ async def _check_registered(update: Update) -> Optional[dict]:
     user = get_user_by_telegram_id(telegram_id)
     if not user:
         await update.effective_message.reply_text(
-            "👋 You're not registered yet!\n\n"
+            "\U0001f44b You're not registered yet!\n\n"
             "Use /start to set up your GitPhone account."
         )
         return None
     if user.get("status") == "banned":
         await update.effective_message.reply_text(
-            "⛔ Your account has been suspended.\n"
+            "[Banned] Your account has been suspended.\n"
             "Contact support if you think this is a mistake."
         )
         return None
@@ -170,7 +171,7 @@ async def _check_registered(update: Update) -> Optional[dict]:
     return user
 
 
-# ── /start Handler ────────────────────────────────────────────────────────────
+# --- /start Handler ------------------------------------------------------------------------------------------
 
 async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     telegram_id = str(update.effective_user.id)
@@ -179,32 +180,32 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     if user and user.get("status") != "banned" and user.get("github_token"):
         pending = get_pending_files(telegram_id)
         last_active = _time_ago(user.get("last_active", ""))
-        active_repo = user.get("active_repo") or user.get("default_repo", "—")
+        active_repo = user.get("active_repo") or user.get("default_repo", "-")
         active_branch = user.get("active_branch") or user.get("branch", "main")
         await update.message.reply_text(
-            f"👋 Welcome back!\n\n"
-            f"📦 `{active_repo}` \u2022 `{active_branch}`\n"
-            f"🕐 Last active: {last_active}\n"
-            f"📁 {len(pending)} file(s) staged\n\n"
+            f"\U0001f44b Welcome back!\n\n"
+            f"[Repo] `{active_repo}` \u2022 `{active_branch}`\n"
+            f"[Time] Last active: {last_active}\n"
+            f"[Files] {len(pending)} file(s) staged\n\n"
             f"Use /files to commit, or /help for all commands.",
             parse_mode=ParseMode.MARKDOWN
         )
         return ConversationHandler.END
 
-    # New user — direct to /auth
+    # New user - direct to /auth
     await update.message.reply_text(
-        "👋 Welcome to *GitPhone!*\n\n"
+        "\U0001f44b Welcome to *GitPhone!*\n\n"
         "Commit to GitHub from anywhere \u2014 right from your phone.\n\n"
         "First, let's connect your GitHub account.\n\n"
-        "📱 *Your Telegram ID:* `" + telegram_id + "`\n"
+        "\U0001f4f1 *Your Telegram ID:* `" + telegram_id + "`\n"
         "_(You'll need this for the VS Code extension)_\n\n"
-        "Use /auth to sign in with GitHub →",
+        "Use /auth to sign in with GitHub \u2192",
         parse_mode=ParseMode.MARKDOWN,
     )
     return ConversationHandler.END
 
 
-# ── /auth Handler — GitHub Device Flow ────────────────────────────────────────
+# --- /auth Handler - GitHub Device Flow ------------------------------------------------------------
 
 async def auth_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Start GitHub Device Flow. User enters a code on github.com/login/device."""
@@ -212,13 +213,13 @@ async def auth_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
 
     if not GITHUB_CLIENT_ID:
         await update.message.reply_text(
-            "❌ GitHub OAuth not configured.\n\n"
+            "[X] GitHub OAuth not configured.\n\n"
             "The bot admin needs to set GITHUB\_CLIENT\_ID env var.",
             parse_mode=ParseMode.MARKDOWN
         )
         return ConversationHandler.END
 
-    await update.message.reply_text("🔐 Starting GitHub sign-in...")
+    await update.message.reply_text("[Admin] Starting GitHub sign-in...")
 
     # Step 1: Request device code
     try:
@@ -231,12 +232,12 @@ async def auth_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
             )
         data = resp.json()
     except Exception as e:
-        await update.message.reply_text(f"❌ Failed to reach GitHub: {e}")
+        await update.message.reply_text(f"[X] Failed to reach GitHub: {e}")
         return ConversationHandler.END
 
     if "error" in data:
         await update.message.reply_text(
-            f"❌ GitHub error: {data.get('error_description', data['error'])}"
+            f"[X] GitHub error: {data.get('error_description', data['error'])}"
         )
         return ConversationHandler.END
 
@@ -252,9 +253,9 @@ async def auth_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     context.user_data["auth_expires"]  = asyncio.get_event_loop().time() + expires_in
 
     await update.message.reply_text(
-        f"🔐 *Sign in with GitHub*\n\n"
+        f"[Admin] *Sign in with GitHub*\n\n"
         f"1\u20e3 Open this link:\n"
-        f"👉 [{verification_uri}]({verification_uri})\n\n"
+        f"\U0001f449 [{verification_uri}]({verification_uri})\n\n"
         f"2\u20e3 Enter this code:\n"
         f"```\n{user_code}\n```\n\n"
         f"3\u20e3 Click *Authorize* in the browser\n\n"
@@ -324,7 +325,7 @@ async def _poll_device_auth(
             await context.bot.send_message(
                 chat_id=chat_id,
                 text=(
-                    f"✅ *GitHub connected!*\n\n"
+                    f"[OK] *GitHub connected!*\n\n"
                     f"Signed in as *{username or 'your GitHub account'}*\n\n"
                     f"Now set your default repo with:\n"
                     f"`/repo owner/repo-name`"
@@ -339,23 +340,23 @@ async def _poll_device_auth(
         elif error == "expired_token":
             await context.bot.send_message(
                 chat_id=chat_id,
-                text="❌ Authorization expired. Use /auth to try again.",
+                text="[X] Authorization expired. Use /auth to try again.",
             )
             return
         elif error not in ("authorization_pending", "slow_down", ""):
             await context.bot.send_message(
                 chat_id=chat_id,
-                text=f"❌ Auth error: {data.get('error_description', error)}",
+                text=f"[X] Auth error: {data.get('error_description', error)}",
             )
             return
 
     await context.bot.send_message(
         chat_id=chat_id,
-        text="⏰ Authorization timed out. Use /auth to try again.",
+        text="\u23f0 Authorization timed out. Use /auth to try again.",
     )
 
 
-# ── /repo set handler — /repo owner/name ──────────────────────────────────────
+# --- /repo set handler - /repo owner/name ---------------------------------------------------------
 
 async def set_repo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Allow user to set default repo: /repo owner/name"""
@@ -365,10 +366,10 @@ async def set_repo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     args = context.args
     if not args or "/" not in args[0]:
-        active_repo   = user.get("active_repo")   or user.get("default_repo", "—")
+        active_repo   = user.get("active_repo")   or user.get("default_repo", "-")
         active_branch = user.get("active_branch") or user.get("branch", "main")
         await update.message.reply_text(
-            f"📦 *Active Repository*\n\n"
+            f"[Repo] *Active Repository*\n\n"
             f"`{active_repo}` \u2022 `{active_branch}`\n\n"
             f"To change: `/repo owner/repo-name`",
             parse_mode=ParseMode.MARKDOWN,
@@ -377,12 +378,12 @@ async def set_repo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     telegram_id = str(update.effective_user.id)
     new_repo = args[0].strip()
-    await update.message.reply_text("🔍 Checking repo access...")
+    await update.message.reply_text("\U0001f50d Checking repo access...")
     token = user.get("github_token")
     result = github_service.validate_token_and_repo(token, new_repo)
     if not result["ok"]:
         await update.message.reply_text(
-            f"❌ Cannot access `{new_repo}`: {result.get('message')}\n\n"
+            f"[X] Cannot access `{new_repo}`: {result.get('message')}\n\n"
             "Make sure the repo exists and your token has access.",
             parse_mode=ParseMode.MARKDOWN
         )
@@ -391,7 +392,7 @@ async def set_repo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     upsert_user({"telegram_id": telegram_id, "default_repo": new_repo, "active_repo": new_repo})
     default_branch = result.get("default_branch", "main")
     await update.message.reply_text(
-        f"✅ Default repo set to `{new_repo}`\n"
+        f"[OK] Default repo set to `{new_repo}`\n"
         f"Default branch: `{default_branch}`\n\n"
         f"Use /branch to switch branch.",
         parse_mode=ParseMode.MARKDOWN
@@ -399,39 +400,39 @@ async def set_repo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     return ConversationHandler.END
 
 
-# ── /repo Handler ─────────────────────────────────────────────────────────────
+# --- /repo Handler -------------------------------------------------------------------------------------------
 
 async def repo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = await _check_registered(update)
     if not user:
         return
 
-    active_repo = user.get("active_repo") or user.get("default_repo", "—")
+    active_repo = user.get("active_repo") or user.get("default_repo", "-")
     active_branch = user.get("active_branch") or user.get("branch", "main")
-    default_repo = user.get("default_repo", "—")
+    default_repo = user.get("default_repo", "-")
     is_auto = bool(user.get("active_repo") and user.get("active_repo") != default_repo)
 
-    source_note = "🔄 Auto-detected from VS Code" if is_auto else "📌 Set in configuration"
+    source_note = "\U0001f504 Auto-detected from VS Code" if is_auto else "\U0001f4cc Set in configuration"
 
     await update.message.reply_text(
-        f"📦 *Active Repository*\n\n"
-        f"`{active_repo}` • `{active_branch}`\n"
+        f"[Repo] *Active Repository*\n\n"
+        f"`{active_repo}` \u2022 `{active_branch}`\n"
         f"{source_note}\n\n"
-        f"📌 Default repo: `{default_repo}`\n\n"
-        f"_Open a different project in VS Code and save a file — "
+        f"\U0001f4cc Default repo: `{default_repo}`\n\n"
+        f"_Open a different project in VS Code and save a file - "
         f"GitPhone will auto-switch to that repo._\n\n"
         f"Use /branch to switch branch.",
         parse_mode=ParseMode.MARKDOWN,
         reply_markup=InlineKeyboardMarkup([[
             InlineKeyboardButton(
-                f"View on GitHub ↗",
+                f"View on GitHub \u2197",
                 url=f"https://github.com/{active_repo}"
             )
         ]])
     )
 
 
-# ── /branch Handler ───────────────────────────────────────────────────────────
+# --- /branch Handler ----------------------------------------------------------------------------------------
 
 async def branch_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user = await _check_registered(update)
@@ -442,18 +443,18 @@ async def branch_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     args = context.args
 
     if args:
-        # /branch main — inline switch
+        # /branch main - inline switch
         new_branch = args[0].strip()
         update_branch(str(update.effective_user.id), new_branch)
         await update.message.reply_text(
-            f"✅ Branch switched to `{new_branch}`\n\n"
+            f"[OK] Branch switched to `{new_branch}`\n\n"
             f"Future commits will go to `{new_branch}`.",
             parse_mode=ParseMode.MARKDOWN
         )
         return ConversationHandler.END
 
     await update.message.reply_text(
-        f"🌿 *Current Branch:* `{current}`\n\n"
+        f"[Branch] *Current Branch:* `{current}`\n\n"
         f"Type the branch name to switch, or /cancel:",
         parse_mode=ParseMode.MARKDOWN
     )
@@ -465,19 +466,19 @@ async def branch_name_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     telegram_id = str(update.effective_user.id)
 
     if not new_branch or " " in new_branch:
-        await update.message.reply_text("❌ Invalid branch name. Try again or /cancel")
+        await update.message.reply_text("[X] Invalid branch name. Try again or /cancel")
         return WAITING_NEW_BRANCH
 
     update_branch(telegram_id, new_branch)
     await update.message.reply_text(
-        f"✅ Branch switched to `{new_branch}`\n\n"
+        f"[OK] Branch switched to `{new_branch}`\n\n"
         f"Future commits will go to `{new_branch}`.",
         parse_mode=ParseMode.MARKDOWN
     )
     return ConversationHandler.END
 
 
-# ── /unstage Handler ──────────────────────────────────────────────────────────
+# --- /unstage Handler ---------------------------------------------------------------------------------------
 
 async def unstage_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = await _check_registered(update)
@@ -490,12 +491,12 @@ async def unstage_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if not args:
         staged = get_pending_files(telegram_id)
         if not staged:
-            await update.message.reply_text("📭 No staged files to unstage.")
+            await update.message.reply_text("[Empty] No staged files to unstage.")
             return
 
-        file_list = "\n".join(f"• `{f['filepath']}`" for f in staged[:20])
+        file_list = "\n".join(f"\u2022 `{f['filepath']}`" for f in staged[:20])
         await update.message.reply_text(
-            f"📁 *Staged Files:*\n\n{file_list}\n\n"
+            f"[Files] *Staged Files:*\n\n{file_list}\n\n"
             f"Usage: `/unstage src/filename.py`",
             parse_mode=ParseMode.MARKDOWN
         )
@@ -506,20 +507,20 @@ async def unstage_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     if found:
         await update.message.reply_text(
-            f"✅ Unstaged: `{filepath}`\n\n"
+            f"[OK] Unstaged: `{filepath}`\n\n"
             f"The file was removed from your staged list.\n"
             f"It will be re-staged next time you save it in VS Code.",
             parse_mode=ParseMode.MARKDOWN
         )
     else:
         await update.message.reply_text(
-            f"❌ File not found in staged list: `{filepath}`\n\n"
+            f"[X] File not found in staged list: `{filepath}`\n\n"
             f"Use /unstage without arguments to see staged files.",
             parse_mode=ParseMode.MARKDOWN
         )
 
 
-# ── /clear Handler ────────────────────────────────────────────────────────────
+# --- /clear Handler ------------------------------------------------------------------------------------------
 
 async def clear_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = await _check_registered(update)
@@ -530,20 +531,20 @@ async def clear_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     staged = get_pending_files(telegram_id)
 
     if not staged:
-        await update.message.reply_text("📭 No staged files to clear.")
+        await update.message.reply_text("[Empty] No staged files to clear.")
         return
 
     keyboard = InlineKeyboardMarkup([
         [
-            InlineKeyboardButton(f"🗑️ Clear All ({len(staged)} files)", callback_data="CLEAR_CONFIRM"),
-            InlineKeyboardButton("❌ Cancel", callback_data="COMMIT_CANCEL"),
+            InlineKeyboardButton(f"[Clear] Clear All ({len(staged)} files)", callback_data="CLEAR_CONFIRM"),
+            InlineKeyboardButton("[X] Cancel", callback_data="COMMIT_CANCEL"),
         ]
     ])
     await update.message.reply_text(
-        f"⚠️ *Clear All Staged Files?*\n\n"
+        f"[Warning] *Clear All Staged Files?*\n\n"
         f"This will remove all {len(staged)} staged file(s).\n"
         f"This cannot be undone.\n\n"
-        f"Your actual files are safe — only the staged diffs are cleared.",
+        f"Your actual files are safe - only the staged diffs are cleared.",
         reply_markup=keyboard,
         parse_mode=ParseMode.MARKDOWN
     )
@@ -555,12 +556,12 @@ async def clear_confirm_callback(update: Update, context: ContextTypes.DEFAULT_T
     telegram_id = str(update.effective_user.id)
     count = clear_all_staged(telegram_id)
     await query.edit_message_text(
-        f"✅ Cleared {count} staged file(s).\n\n"
+        f"[OK] Cleared {count} staged file(s).\n\n"
         f"Save files in VS Code to re-stage them."
     )
 
 
-# ── /preview Handler ──────────────────────────────────────────────────────────
+# --- /preview Handler ---------------------------------------------------------------------------------------
 
 async def preview_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = await _check_registered(update)
@@ -572,13 +573,13 @@ async def preview_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     if not staged:
         await update.message.reply_text(
-            "📭 No staged files to preview.\n\n"
+            "[Empty] No staged files to preview.\n\n"
             "Save files in VS Code to stage them."
         )
         return
 
     # Show diff snippets for first 5 files
-    lines = [f"👁 *Diff Preview* — {len(staged)} file(s) staged\n"]
+    lines = [f"\U0001f441 *Diff Preview* - {len(staged)} file(s) staged\n"]
     for f in staged[:5]:
         filepath = f["filepath"]
         size = _format_file_size(f.get("file_size", 0))
@@ -607,7 +608,7 @@ async def preview_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     )
 
 
-# ── /files Handler (grouped by repo) ─────────────────────────────────────────
+# --- /files Handler (grouped by repo) -------------------------------------------------------------
 
 async def files_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user = await _check_registered(update)
@@ -618,12 +619,12 @@ async def files_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     grouped = get_pending_files_by_repo(telegram_id)
 
     if not grouped:
-        active_repo = user.get("active_repo") or user.get("default_repo", "—")
+        active_repo = user.get("active_repo") or user.get("default_repo", "-")
         active_branch = user.get("active_branch") or user.get("branch", "main")
         await update.message.reply_text(
-            "📭 *No files staged yet.*\n\n"
+            "[Empty] *No files staged yet.*\n\n"
             "Save a file in VS Code and it will appear here automatically.\n\n"
-            f"Active: `{active_repo}` • `{active_branch}`",
+            f"Active: `{active_repo}` \u2022 `{active_branch}`",
             parse_mode=ParseMode.MARKDOWN
         )
         return ConversationHandler.END
@@ -642,13 +643,13 @@ async def files_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     if len(grouped) == 1:
         repo_name = list(grouped.keys())[0]
         branch = user.get("active_branch") or user.get("branch", "main")
-        header = f"📁 *{repo_name}* • `{branch}`\n\nSelect files to commit:"
+        header = f"[Files] *{repo_name}* \u2022 `{branch}`\n\nSelect files to commit:"
     else:
         repo_summary = "\n".join(
-            f"  📦 `{r}` — {len(files)} file(s)"
+            f"  [Repo] `{r}` - {len(files)} file(s)"
             for r, files in grouped.items()
         )
-        header = f"📁 *{len(grouped)} Repos* staged:\n{repo_summary}\n\nSelect files to commit:"
+        header = f"[Files] *{len(grouped)} Repos* staged:\n{repo_summary}\n\nSelect files to commit:"
 
     keyboard = _build_files_keyboard(all_files, set())
     await update.message.reply_text(
@@ -677,11 +678,11 @@ async def file_toggle_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     keyboard = _build_files_keyboard(staged_files, selected)
 
     user = get_user_by_telegram_id(str(update.effective_user.id))
-    active_repo = user.get("active_repo") or user.get("default_repo", "—")
+    active_repo = user.get("active_repo") or user.get("default_repo", "-")
     branch = user.get("active_branch") or user.get("branch", "main")
     try:
         await query.edit_message_text(
-            f"📁 *{active_repo}* • `{branch}`\n\nSelect files to commit:",
+            f"[Files] *{active_repo}* \u2022 `{branch}`\n\nSelect files to commit:",
             reply_markup=keyboard,
             parse_mode=ParseMode.MARKDOWN
         )
@@ -702,11 +703,11 @@ async def file_select_all_callback(update: Update, context: ContextTypes.DEFAULT
     keyboard = _build_files_keyboard(staged_files, selected)
 
     user = get_user_by_telegram_id(str(update.effective_user.id))
-    active_repo = user.get("active_repo") or user.get("default_repo", "—")
+    active_repo = user.get("active_repo") or user.get("default_repo", "-")
     branch = user.get("active_branch") or user.get("branch", "main")
     try:
         await query.edit_message_text(
-            f"📁 *{active_repo}* • `{branch}`\n\nSelect files to commit:",
+            f"[Files] *{active_repo}* \u2022 `{branch}`\n\nSelect files to commit:",
             reply_markup=keyboard,
             parse_mode=ParseMode.MARKDOWN
         )
@@ -723,14 +724,14 @@ async def done_selecting_callback(update: Update, context: ContextTypes.DEFAULT_
     staged_data: dict = context.user_data.get("staged_data", {})
 
     if not selected:
-        await query.answer("⚠️ No files selected. Tap files to toggle.", show_alert=True)
+        await query.answer("[Warning] No files selected. Tap files to toggle.", show_alert=True)
         return SELECTING_FILES
 
     selected_names = [staged_data[fid]["filepath"] for fid in selected if fid in staged_data]
-    files_display = "\n".join(f"• `{f}`" for f in selected_names)
+    files_display = "\n".join(f"\u2022 `{f}`" for f in selected_names)
 
     await query.edit_message_text(
-        f"✏️ *Type your commit message:*\n\n"
+        f"\u270f\ufe0f *Type your commit message:*\n\n"
         f"Selected:\n{files_display}\n\n"
         f'_(e.g. "fix: updated auth logic")_',
         parse_mode=ParseMode.MARKDOWN
@@ -741,12 +742,12 @@ async def done_selecting_callback(update: Update, context: ContextTypes.DEFAULT_
 async def commit_message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     message = update.message.text.strip()
     if not message:
-        await update.message.reply_text("⚠️ Commit message cannot be empty. Try again:")
+        await update.message.reply_text("[Warning] Commit message cannot be empty. Try again:")
         return WAITING_MESSAGE
 
     context.user_data["commit_message"] = message
 
-    # After commit message — show branch picker
+    # After commit message - show branch picker
     telegram_id = str(update.effective_user.id)
     user = get_user_by_telegram_id(telegram_id)
     active_repo   = user.get("active_repo") or user.get("default_repo", "")
@@ -760,16 +761,16 @@ async def commit_message_handler(update: Update, context: ContextTypes.DEFAULT_T
     # Build branch picker keyboard
     buttons = []
     # First: current branch (most likely choice)
-    current_label = f"✅ {current_branch} (current)"
+    current_label = f"[OK] {current_branch} (current)"
     buttons.append([InlineKeyboardButton(current_label, callback_data=f"BRANCH_PICK:{current_branch}")])
     # Other branches (skip current to avoid duplicate)
     for b in branches[:8]:
         if b != current_branch:
             is_default = " (default)" if b == default_branch else ""
-            buttons.append([InlineKeyboardButton(f"🌿 {b}{is_default}", callback_data=f"BRANCH_PICK:{b}")])
+            buttons.append([InlineKeyboardButton(f"[Branch] {b}{is_default}", callback_data=f"BRANCH_PICK:{b}")])
     # Always offer create new
-    buttons.append([InlineKeyboardButton("➕ Create new branch...", callback_data="BRANCH_NEW")])
-    buttons.append([InlineKeyboardButton("❌ Cancel", callback_data="COMMIT_CANCEL")])
+    buttons.append([InlineKeyboardButton("\u2795 Create new branch...", callback_data="BRANCH_NEW")])
+    buttons.append([InlineKeyboardButton("[X] Cancel", callback_data="COMMIT_CANCEL")])
 
     selected_names = [
         context.user_data["staged_data"][fid]["filepath"]
@@ -781,9 +782,9 @@ async def commit_message_handler(update: Update, context: ContextTypes.DEFAULT_T
         files_display += f"\n_...and {len(selected_names) - 5} more_"
 
     await update.message.reply_text(
-        f"🌿 *Choose branch to commit to:*\n\n"
-        f"📦 `{active_repo}`\n"
-        f"💬 `{message}`\n\n"
+        f"[Branch] *Choose branch to commit to:*\n\n"
+        f"[Repo] `{active_repo}`\n"
+        f"\U0001f4ac `{message}`\n\n"
         f"Files:\n{files_display}",
         reply_markup=InlineKeyboardMarkup(buttons),
         parse_mode=ParseMode.MARKDOWN
@@ -810,15 +811,15 @@ async def branch_pick_callback(update: Update, context: ContextTypes.DEFAULT_TYP
 
     keyboard = InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("🚀 Commit Now", callback_data="COMMIT_NOW"),
-            InlineKeyboardButton("❌ Cancel", callback_data="COMMIT_CANCEL"),
+            InlineKeyboardButton("\U0001f680 Commit Now", callback_data="COMMIT_NOW"),
+            InlineKeyboardButton("[X] Cancel", callback_data="COMMIT_CANCEL"),
         ]
     ])
     await query.edit_message_text(
-        f"📦 *Review Commit*\n\n"
+        f"[Repo] *Review Commit*\n\n"
         f"Files:\n{files_display}\n\n"
-        f"💬 `{message}`\n"
-        f"🌿 `{chosen_branch}` \u2022 `{active_repo}`\n\n"
+        f"\U0001f4ac `{message}`\n"
+        f"[Branch] `{chosen_branch}` \u2022 `{active_repo}`\n\n"
         f"Ready to commit?",
         reply_markup=keyboard,
         parse_mode=ParseMode.MARKDOWN
@@ -831,7 +832,7 @@ async def branch_new_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
     query = update.callback_query
     await query.answer()
     await query.edit_message_text(
-        "🌿 *New Branch Name*\n\n"
+        "[Branch] *New Branch Name*\n\n"
         "Type the branch name (e.g. `feature/my-fix`):\n\n"
         "_No spaces. Use - or / as separators._",
         parse_mode=ParseMode.MARKDOWN
@@ -844,7 +845,7 @@ async def new_branch_name_handler(update: Update, context: ContextTypes.DEFAULT_
     branch_name = update.message.text.strip()
     if not branch_name or " " in branch_name:
         await update.message.reply_text(
-            "❌ Invalid branch name (no spaces allowed).\n\nTry again:"
+            "[X] Invalid branch name (no spaces allowed).\n\nTry again:"
         )
         return WAITING_NEW_BR_NAME
 
@@ -854,19 +855,19 @@ async def new_branch_name_handler(update: Update, context: ContextTypes.DEFAULT_
     active_repo   = user.get("active_repo") or user.get("default_repo", "")
     default_branch = github_service.get_default_branch(token, active_repo)
 
-    await update.message.reply_text(f"🔨 Creating branch `{branch_name}`...",
+    await update.message.reply_text(f"\U0001f528 Creating branch `{branch_name}`...",
                                      parse_mode=ParseMode.MARKDOWN)
 
     result = github_service.create_branch(token, active_repo, branch_name, from_branch=default_branch)
     if not result["ok"]:
         if result.get("error") == "branch_exists":
             await update.message.reply_text(
-                f"ℹ️ Branch `{branch_name}` already exists \u2014 will commit to it.",
+                f"\u2139\ufe0f Branch `{branch_name}` already exists \u2014 will commit to it.",
                 parse_mode=ParseMode.MARKDOWN
             )
         else:
             await update.message.reply_text(
-                f"❌ Failed to create branch: {result.get('message')}\n\n"
+                f"[X] Failed to create branch: {result.get('message')}\n\n"
                 "Try a different name or /cancel"
             )
             return WAITING_NEW_BR_NAME
@@ -881,16 +882,70 @@ async def new_branch_name_handler(update: Update, context: ContextTypes.DEFAULT_
 
     keyboard = InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("🚀 Commit Now", callback_data="COMMIT_NOW"),
-            InlineKeyboardButton("❌ Cancel", callback_data="COMMIT_CANCEL"),
+            InlineKeyboardButton("\U0001f680 Commit Now", callback_data="COMMIT_NOW"),
+            InlineKeyboardButton("[X] Cancel", callback_data="COMMIT_CANCEL"),
         ]
     ])
     await update.message.reply_text(
-        f"✅ Branch `{branch_name}` ready!\n\n"
-        f"📦 *Review Commit*\n\n"
+        f"[OK] Branch `{branch_name}` ready!\n\n"
+        f"[Repo] *Review Commit*\n\n"
         f"Files:\n{files_display}\n\n"
-        f"💬 `{message}`\n"
-        f"🌿 `{branch_name}` \u2022 `{active_repo}`\n\n"
+        f"\U0001f4ac `{message}`\n"
+        f"[Branch] `{branch_name}` \u2022 `{active_repo}`\n\n"
+        f"Ready to commit?",
+        reply_markup=keyboard,
+        parse_mode=ParseMode.MARKDOWN
+    )
+    return CONFIRM_COMMIT
+
+
+async def protected_branch_name_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """User typed a new branch name after hit a protected branch error."""
+    new_branch = update.message.text.strip()
+    if not new_branch or " " in new_branch:
+        await update.message.reply_text("[X] Invalid branch name. Try again or /cancel")
+        return WAITING_PROTECTED_BRANCH_NAME
+
+    telegram_id = str(update.effective_user.id)
+    user = get_user_by_telegram_id(telegram_id)
+    token = user.get("github_token", "")
+    active_repo = user.get("active_repo") or user.get("default_repo", "")
+    default_branch = github_service.get_default_branch(token, active_repo)
+
+    await update.message.reply_text(f"\U0001f528 Creating branch `{new_branch}` and committing...",
+                                     parse_mode=ParseMode.MARKDOWN)
+
+    # Create the branch
+    br_res = github_service.create_branch(token, active_repo, new_branch, from_branch=default_branch)
+    if not br_res["ok"] and br_res.get("error") != "branch_exists":
+        await update.message.reply_text(f"[X] Failed to create branch: {br_res.get('message')}")
+        return WAITING_PROTECTED_BRANCH_NAME
+
+    # Direct commit to this new branch
+    context.user_data["commit_branch"] = new_branch
+    # Reuse commit_now logic by calling it manually (with a fake update/query) or just redirecting
+    # Actually, it's better to just finish this state and tell user to click commit again,
+    # OR we can just trigger the commit here.
+    # To keep it simple and safe, let's show the review screen again with the new branch.
+    
+    selected = context.user_data.get("selected_files", set())
+    staged_data = context.user_data.get("staged_data", {})
+    selected_names = [staged_data[fid]["filepath"] for fid in selected if fid in staged_data]
+    files_display = "\n".join(f"\u2022 `{f}`" for f in selected_names)
+    message = context.user_data.get("commit_message", "")
+
+    keyboard = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("\U0001f680 Commit Now", callback_data="COMMIT_NOW"),
+            InlineKeyboardButton("[X] Cancel", callback_data="COMMIT_CANCEL"),
+        ]
+    ])
+    await update.message.reply_text(
+        f"[OK] Branch `{new_branch}` created!\n\n"
+        f"[Repo] *Review Commit*\n\n"
+        f"Files:\n{files_display}\n\n"
+        f"\U0001f4ac `{message}`\n"
+        f"[Branch] `{new_branch}` \u2022 `{active_repo}`\n\n"
         f"Ready to commit?",
         reply_markup=keyboard,
         parse_mode=ParseMode.MARKDOWN
@@ -906,7 +961,7 @@ async def commit_now_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
     telegram_id = str(update.effective_user.id)
     user = get_user_by_telegram_id(telegram_id)
     if not user:
-        await query.edit_message_text("❌ User not found. Please /start again.")
+        await query.edit_message_text("[X] User not found. Please /start again.")
         return ConversationHandler.END
 
     active_repo   = user.get("active_repo") or user.get("default_repo")
@@ -921,7 +976,7 @@ async def commit_now_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
     staged_rows = get_staged_files_by_ids(file_ids)
 
     if not staged_rows:
-        await query.edit_message_text("❌ Could not load staged files. Try /files again.")
+        await query.edit_message_text("[X] Could not load staged files. Try /files again.")
         return ConversationHandler.END
 
     result = github_service.commit_files(
@@ -963,7 +1018,7 @@ async def commit_now_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
         conflict_note = ""
         if result.get("conflict_files"):
             conflict_note = (
-                f"\n\n⚠️ Skipped (conflict): "
+                f"\n\n[Warning] Skipped (conflict): "
                 + ", ".join(f"`{f}`" for f in result["conflict_files"])
             )
 
@@ -981,20 +1036,23 @@ async def commit_now_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
             if pr_result["ok"]:
                 pr_url = pr_result["pr_url"]
                 pr_num = pr_result["number"]
-                pr_note = f"\n\n🔀 PR #{pr_num} created \u2192 ready to merge"
-                pr_button = InlineKeyboardButton("Open PR on GitHub ↗", url=pr_url)
+                pr_note = f"\n\n\U0001f500 PR #{pr_num} created \u2192 ready to merge"
+                pr_button = InlineKeyboardButton("Open PR on GitHub \u2197", url=pr_url)
 
         commit_url = f"https://github.com/{active_repo}/commit/{commit_sha}"
-        buttons = [[InlineKeyboardButton("View Commit ↗", url=commit_url)]]
+        buttons = []
         if pr_button:
+            # If it's a PR, only show the PR merge link
             buttons.append([pr_button])
+        else:
+            buttons.append([InlineKeyboardButton("View Commit [Link]", url=commit_url)])
 
         await query.edit_message_text(
-            f"✅ *Committed!*\n\n"
-            f"🔗 [`{short_sha}`]({commit_url})\n"
-            f"💬 {commit_message}\n"
-            f"🌿 `{active_branch}` \u2022 `{active_repo}`\n"
-            f"🕐 Just now{conflict_note}{pr_note}",
+            f"\u2705 *Committed!*\n\n"
+            f"[Link] [`{short_sha}`]({commit_url})\n"
+            f"\U0001f4ac {commit_message}\n"
+            f"[Branch] `{active_branch}` \u2022 `{active_repo}`\n"
+            f"[Time] Just now{conflict_note}{pr_note}",
             reply_markup=InlineKeyboardMarkup(buttons),
             parse_mode=ParseMode.MARKDOWN
         )
@@ -1012,11 +1070,11 @@ async def commit_now_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
         )
 
         keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔄 Force Commit (overwrite)", callback_data="COMMIT_FORCE")],
-            [InlineKeyboardButton("❌ Cancel", callback_data="COMMIT_CANCEL")],
+            [InlineKeyboardButton("\U0001f504 Force Commit (overwrite)", callback_data="COMMIT_FORCE")],
+            [InlineKeyboardButton("[X] Cancel", callback_data="COMMIT_CANCEL")],
         ])
         await query.edit_message_text(
-            f"⚠️ *Conflict Detected*\n\n"
+            f"[Warning] *Conflict Detected*\n\n"
             f"{conflict_display}\n\n"
             f"These files were modified on GitHub after staging.\n\n"
             f"What would you like to do?",
@@ -1026,25 +1084,21 @@ async def commit_now_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
         return CONFIRM_COMMIT
 
     elif result.get("error") == "branch_protected":
-        # Protected branch — offer to create a new branch and PR instead
-        default_branch = github_service.get_default_branch(user["github_token"], active_repo)
+        # Protected branch - offer to name a NEW branch immediately
         await channel_logger.log_commit_failed(telegram_id, active_repo, "branch_protected")
         await query.edit_message_text(
-            f"🔒 *Branch `{active_branch}` is protected.*\n\n"
-            f"Direct pushes to `{active_branch}` are not allowed.\n\n"
-            f"To commit, go back and choose (or create) a different branch — "
-            f"GitPhone will automatically open a PR to merge it into `{default_branch}`.",
-            reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("↩️ Pick a different branch", callback_data="BACK_TO_BRANCH")
-            ]]),
+            f"Locked: *Branch `{active_branch}` is protected.*\n\n"
+            f"Direct pushes are not allowed. Please type a name for a *new branch* to commit to instead:\n\n"
+            f"_(e.g. `patch-1` or `fix/auth`)_",
             parse_mode=ParseMode.MARKDOWN
         )
+        return WAITING_PROTECTED_BRANCH_NAME
 
     else:
         error_msg = result.get('message', 'Unknown error')
         await channel_logger.log_commit_failed(telegram_id, active_repo, error_msg)
         await query.edit_message_text(
-            f"❌ *Commit failed.*\n\n"
+            f"[X] *Commit failed.*\n\n"
             f"Error: {error_msg}\n\n"
             f"Your staged files are safe. Try /files again."
         )
@@ -1056,7 +1110,7 @@ async def commit_now_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
 async def commit_force_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await query.answer()
-    await query.edit_message_text("⏳ Force committing...")
+    await query.edit_message_text("[Wait] Force committing...")
 
     telegram_id = str(update.effective_user.id)
     user = get_user_by_telegram_id(telegram_id)
@@ -1065,7 +1119,7 @@ async def commit_force_callback(update: Update, context: ContextTypes.DEFAULT_TY
     commit_message = context.user_data.get("commit_message", "GitPhone force commit")
 
     if not staged_rows or not user:
-        await query.edit_message_text("❌ Session expired. Please try /files again.")
+        await query.edit_message_text("[X] Session expired. Please try /files again.")
         return ConversationHandler.END
 
     active_repo = user.get("active_repo") or user.get("default_repo")
@@ -1104,16 +1158,16 @@ async def commit_force_callback(update: Update, context: ContextTypes.DEFAULT_TY
             was_forced=True,
         )
         await query.edit_message_text(
-            f"✅ *Force committed!*\n\n"
-            f"🔗 `{short_sha}`\n"
-            f"💬 {commit_message}\n"
-            f"🌿 `{active_branch}` • `{active_repo}`",
+            f"[OK] *Force committed!*\n\n"
+            f"[Link] `{short_sha}`\n"
+            f"\U0001f4ac {commit_message}\n"
+            f"[Branch] `{active_branch}` \u2022 `{active_repo}`",
             parse_mode=ParseMode.MARKDOWN
         )
     else:
         error_msg = result.get('message', 'Unknown error')
         await channel_logger.log_commit_failed(telegram_id, active_repo, error_msg)
-        await query.edit_message_text(f"❌ Force commit failed: {error_msg}")
+        await query.edit_message_text(f"[X] Force commit failed: {error_msg}")
 
     context.user_data.clear()
     return ConversationHandler.END
@@ -1124,22 +1178,22 @@ async def cancel_commit_callback(update: Update, context: ContextTypes.DEFAULT_T
     await query.answer()
     context.user_data.clear()
     await query.edit_message_text(
-        "✅ Cancelled.\nNo changes were made.\n\nUse /files to start a new commit."
+        "[OK] Cancelled.\nNo changes were made.\n\nUse /files to start a new commit."
     )
     return ConversationHandler.END
 
 
-# ── /cancel Command ────────────────────────────────────────────────────────────
+# --- /cancel Command ------------------------------------------------------------------------------------------
 
 async def cancel_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data.clear()
     await update.message.reply_text(
-        "✅ Cancelled.\nNo changes were made.\n\nUse /files to start a new commit."
+        "[OK] Cancelled.\nNo changes were made.\n\nUse /files to start a new commit."
     )
     return ConversationHandler.END
 
 
-# ── /log Command ──────────────────────────────────────────────────────────────
+# --- /log Command ---------------------------------------------------------------------------------------------
 
 async def log_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = await _check_registered(update)
@@ -1149,22 +1203,22 @@ async def log_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     commits = get_recent_commits(str(update.effective_user.id), limit=10)
     if not commits:
         await update.message.reply_text(
-            "📭 No commits yet via GitPhone.\n\n"
+            "[Empty] No commits yet via GitPhone.\n\n"
             "Stage files in VS Code, then use /files to commit."
         )
         return
 
-    active_repo = user.get("active_repo") or user.get("default_repo", "—")
-    lines = [f"📜 *Recent Commits* (`{active_repo}`)\n"]
+    active_repo = user.get("active_repo") or user.get("default_repo", "-")
+    lines = [f"\U0001f4dc *Recent Commits* (`{active_repo}`)\n"]
     for i, c in enumerate(commits, 1):
         short_sha = c["commit_sha"][:7]
         files_str = ", ".join(c.get("files", []))[:60]
         time_str = _time_ago(c.get("committed_at", ""))
         repo = c.get("repo", active_repo)
         lines.append(
-            f"{i}. `{short_sha}` — {time_str}\n"
+            f"{i}. `{short_sha}` - {time_str}\n"
             f"   {c['message']}\n"
-            f"   _`{repo}` • {files_str}_"
+            f"   _`{repo}` \u2022 {files_str}_"
         )
 
     active_branch = user.get("active_branch") or user.get("branch", "main")
@@ -1173,14 +1227,14 @@ async def log_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         parse_mode=ParseMode.MARKDOWN,
         reply_markup=InlineKeyboardMarkup([[
             InlineKeyboardButton(
-                f"View on GitHub ↗",
+                f"View on GitHub \u2197",
                 url=f"https://github.com/{active_repo}/commits/{active_branch}"
             )
         ]])
     )
 
 
-# ── /status Command ────────────────────────────────────────────────────────────
+# --- /status Command ------------------------------------------------------------------------------------------
 
 async def status_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = await _check_registered(update)
@@ -1192,63 +1246,63 @@ async def status_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     commits = get_recent_commits(telegram_id, limit=100)
     last_sync = _time_ago(user.get("last_active", ""))
 
-    active_repo = user.get("active_repo") or user.get("default_repo", "—")
+    active_repo = user.get("active_repo") or user.get("default_repo", "-")
     active_branch = user.get("active_branch") or user.get("branch", "main")
-    default_repo = user.get("default_repo", "—")
+    default_repo = user.get("default_repo", "-")
 
     auto_note = ""
     if user.get("active_repo") and user.get("active_repo") != default_repo:
-        auto_note = f"\n📡 Auto-detected from VS Code"
+        auto_note = f"\n\U0001f4e1 Auto-detected from VS Code"
 
     await update.message.reply_text(
-        f"📊 *GitPhone Status*\n\n"
-        f"👤 Registered: ✅\n"
-        f"📦 Repo: `{active_repo}`{auto_note}\n"
-        f"🌿 Branch: `{active_branch}`\n"
-        f"🔗 GitHub: Connected ✅\n\n"
-        f"📁 Staged files: {len(staged)} pending\n"
-        f"🕐 Last sync: {last_sync}\n"
-        f"📝 Total commits via GitPhone: {len(commits)}\n\n"
+        f"[Stats] *GitPhone Status*\n\n"
+        f"[User] Registered: [OK]\n"
+        f"[Repo] Repo: `{active_repo}`{auto_note}\n"
+        f"[Branch] Branch: `{active_branch}`\n"
+        f"[Link] GitHub: Connected [OK]\n\n"
+        f"[Files] Staged files: {len(staged)} pending\n"
+        f"[Time] Last sync: {last_sync}\n"
+        f"[Logs] Total commits via GitPhone: {len(commits)}\n\n"
         f"Use /repo to see repo details, /files to commit.",
         parse_mode=ParseMode.MARKDOWN
     )
 
 
-# ── /help Command ──────────────────────────────────────────────────────────────
+# --- /help Command ---------------------------------------------------------------------------------------------
 
 async def help_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     telegram_id = str(update.effective_user.id)
     is_admin = _is_admin(telegram_id)
 
     user_commands = (
-        "🛠 *GitPhone Commands*\n\n"
-        "📁 *Staging & Commits*\n"
-        "/files   — Select staged files & commit\n"
-        "/preview — Preview diffs before committing\n"
-        "/unstage — Remove a file from staged list\n"
-        "/clear   — Clear all staged files\n\n"
-        "📦 *Repo & Branch*\n"
-        "/repo    — Show active repo (auto-detected)\n"
-        "/branch  — Switch branch\n"
-        "/log     — Recent commit history\n"
-        "/status  — Connection & repo status\n\n"
-        "⚙️ *Account*\n"
-        "/auth    — Update GitHub token\n"
-        "/start   — Setup or reconfigure\n"
-        "/cancel  — Cancel current operation\n"
-        "/help    — This message\n\n"
-        "💡 *Tip:* Save any file in VS Code — it auto-stages and "
+        "\U0001f6e0 *GitPhone Commands*\n\n"
+        "[Files] *Staging & Commits*\n"
+        "/files   - Select staged files & commit\n"
+        "/preview - Preview diffs before committing\n"
+        "/unstage - Remove a file from staged list\n"
+        "/clear   - Clear all staged files\n\n"
+        "[Repo] *Repo & Branch*\n"
+        "/repo    - Show active repo (auto-detected)\n"
+        "/branch  - Switch branch\n"
+        "/log     - Recent commit history\n"
+        "/status  - Connection & repo status\n\n"
+        "\u2699\ufe0f *Account*\n"
+        "/auth    - Update GitHub token\n"
+        "/start   - Setup or reconfigure\n"
+        "/cancel  - Cancel current operation\n"
+        "/help    - This message\n\n"
+        "\U0001f4a1 *Tip:* Save any file in VS Code - it auto-stages and "
         "the repo is auto-detected from your git remote."
     )
 
     admin_commands = (
-        "\n\n🔐 *Admin Commands*\n"
-        "/ban `<id>` `[reason]` — Ban a user\n"
-        "/unban `<id>` — Restore a user\n"
-        "/users `[page]` — List all users\n"
-        "/broadcast `<msg>` — Message all users\n"
-        "/stats — Platform statistics\n"
-        "/revoke `<id>` — Force user to re-auth"
+        "\n\n[Admin] *Admin Commands*\n"
+        "/ban `<id>` `[reason]` - Ban a user\n"
+        "/unban `<id>` - Restore a user\n"
+        "/users `[page]` - List all users\n"
+        "/broadcast `<msg>` - Message all users\n"
+        "/stats - Platform statistics\n"
+        "/revoke `<id>` - Force user to re-auth"
     )
 
     await update.message.reply_text(
@@ -1257,12 +1311,12 @@ async def help_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     )
 
 
-# ── Admin Commands ────────────────────────────────────────────────────────────
+# --- Admin Commands ------------------------------------------------------------------------------------------
 
 async def admin_ban_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     telegram_id = str(update.effective_user.id)
     if not _is_admin(telegram_id):
-        await update.message.reply_text("⛔ Admin only.")
+        await update.message.reply_text("[Banned] Admin only.")
         return
 
     args = context.args
@@ -1275,30 +1329,30 @@ async def admin_ban_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
     target = get_user_by_telegram_id(target_id)
     if not target:
-        await update.message.reply_text(f"❌ User `{target_id}` not found.", parse_mode=ParseMode.MARKDOWN)
+        await update.message.reply_text(f"[X] User `{target_id}` not found.", parse_mode=ParseMode.MARKDOWN)
         return
 
     ok = ban_user(target_id, reason)
     if ok:
         await update.message.reply_text(
-            f"✅ User `{target_id}` banned.\nReason: {reason}",
+            f"[OK] User `{target_id}` banned.\nReason: {reason}",
             parse_mode=ParseMode.MARKDOWN
         )
         try:
             await context.bot.send_message(
                 chat_id=int(target_id),
-                text="⛔ Your GitPhone account has been suspended.\nContact support to appeal."
+                text="[Banned] Your GitPhone account has been suspended.\nContact support to appeal."
             )
         except Exception:
             pass
     else:
-        await update.message.reply_text(f"❌ Failed to ban `{target_id}`.", parse_mode=ParseMode.MARKDOWN)
+        await update.message.reply_text(f"[X] Failed to ban `{target_id}`.", parse_mode=ParseMode.MARKDOWN)
 
 
 async def admin_unban_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     telegram_id = str(update.effective_user.id)
     if not _is_admin(telegram_id):
-        await update.message.reply_text("⛔ Admin only.")
+        await update.message.reply_text("[Banned] Admin only.")
         return
 
     args = context.args
@@ -1309,22 +1363,22 @@ async def admin_unban_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     target_id = args[0]
     ok = unban_user(target_id)
     if ok:
-        await update.message.reply_text(f"✅ User `{target_id}` unbanned.", parse_mode=ParseMode.MARKDOWN)
+        await update.message.reply_text(f"[OK] User `{target_id}` unbanned.", parse_mode=ParseMode.MARKDOWN)
         try:
             await context.bot.send_message(
                 chat_id=int(target_id),
-                text="✅ Your GitPhone account has been reinstated. You can use /files again."
+                text="[OK] Your GitPhone account has been reinstated. You can use /files again."
             )
         except Exception:
             pass
     else:
-        await update.message.reply_text(f"❌ User `{target_id}` not found.", parse_mode=ParseMode.MARKDOWN)
+        await update.message.reply_text(f"[X] User `{target_id}` not found.", parse_mode=ParseMode.MARKDOWN)
 
 
 async def admin_users_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     telegram_id = str(update.effective_user.id)
     if not _is_admin(telegram_id):
-        await update.message.reply_text("⛔ Admin only.")
+        await update.message.reply_text("[Banned] Admin only.")
         return
 
     args = context.args
@@ -1333,15 +1387,15 @@ async def admin_users_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     users = get_all_users(limit=page_size, offset=page * page_size)
     if not users:
-        await update.message.reply_text("📭 No users found.")
+        await update.message.reply_text("[Empty] No users found.")
         return
 
-    lines = [f"👥 *Users* (page {page + 1})\n"]
+    lines = [f"[Users] *Users* (page {page + 1})\n"]
     for u in users:
-        repo = u.get("active_repo") or u.get("default_repo", "—")
-        status = "⛔" if u.get("status") == "banned" else "✅"
+        repo = u.get("active_repo") or u.get("default_repo", "-")
+        status = "[Banned]" if u.get("status") == "banned" else "[OK]"
         last = _time_ago(u.get("last_active", ""))
-        lines.append(f"{status} `{u['telegram_id']}` — `{repo}` — {last}")
+        lines.append(f"{status} `{u['telegram_id']}` - `{repo}` - {last}")
 
     lines.append(f"\n_Use /users {page + 2} for next page_")
     await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN)
@@ -1350,7 +1404,7 @@ async def admin_users_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
 async def admin_broadcast_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     telegram_id = str(update.effective_user.id)
     if not _is_admin(telegram_id):
-        await update.message.reply_text("⛔ Admin only.")
+        await update.message.reply_text("[Banned] Admin only.")
         return
 
     args = context.args
@@ -1369,7 +1423,7 @@ async def admin_broadcast_handler(update: Update, context: ContextTypes.DEFAULT_
         try:
             await context.bot.send_message(
                 chat_id=int(u["telegram_id"]),
-                text=f"📢 *GitPhone Announcement*\n\n{message}",
+                text=f"[Broadcast] *GitPhone Announcement*\n\n{message}",
                 parse_mode=ParseMode.MARKDOWN
             )
             sent += 1
@@ -1377,25 +1431,25 @@ async def admin_broadcast_handler(update: Update, context: ContextTypes.DEFAULT_
             failed += 1
 
     await update.message.reply_text(
-        f"✅ Broadcast sent!\n"
-        f"✉️ Delivered: {sent}\n"
-        f"❌ Failed: {failed}"
+        f"[OK] Broadcast sent!\n"
+        f"\u2709\ufe0f Delivered: {sent}\n"
+        f"[X] Failed: {failed}"
     )
 
 
 async def admin_stats_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     telegram_id = str(update.effective_user.id)
     if not _is_admin(telegram_id):
-        await update.message.reply_text("⛔ Admin only.")
+        await update.message.reply_text("[Banned] Admin only.")
         return
 
     stats = count_stats()
     await update.message.reply_text(
-        f"📊 *GitPhone Stats*\n\n"
-        f"👥 Users: {stats.get('total_users', 0)} registered\n"
-        f"⛔ Banned: {stats.get('banned_users', 0)}\n"
-        f"📁 Staged: {stats.get('pending_files', 0)} pending files\n"
-        f"📝 Commits: {stats.get('total_commits', 0)} total",
+        f"[Stats] *GitPhone Stats*\n\n"
+        f"[Users] Users: {stats.get('total_users', 0)} registered\n"
+        f"[Banned] Banned: {stats.get('banned_users', 0)}\n"
+        f"[Files] Staged: {stats.get('pending_files', 0)} pending files\n"
+        f"[Logs] Commits: {stats.get('total_commits', 0)} total",
         parse_mode=ParseMode.MARKDOWN
     )
 
@@ -1403,7 +1457,7 @@ async def admin_stats_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
 async def admin_revoke_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     telegram_id = str(update.effective_user.id)
     if not _is_admin(telegram_id):
-        await update.message.reply_text("⛔ Admin only.")
+        await update.message.reply_text("[Banned] Admin only.")
         return
 
     args = context.args
@@ -1415,21 +1469,21 @@ async def admin_revoke_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     ok = revoke_api_key(target_id)
     if ok:
         await update.message.reply_text(
-            f"✅ API key revoked for `{target_id}`.\n"
+            f"[OK] API key revoked for `{target_id}`.\n"
             f"User must re-connect the VS Code extension.",
             parse_mode=ParseMode.MARKDOWN
         )
     else:
-        await update.message.reply_text(f"❌ User `{target_id}` not found.", parse_mode=ParseMode.MARKDOWN)
+        await update.message.reply_text(f"[X] User `{target_id}` not found.", parse_mode=ParseMode.MARKDOWN)
 
 
-# ── Conversation Handler Builders (exported to main.py) ───────────────────────
+# --- Conversation Handler Builders (exported to main.py) ----------------------------------
 
 def build_start_conversation() -> ConversationHandler:
     """
     /start no longer has a multi-step flow.
     New users are directed to /auth (Device Flow) instead of entering a PAT.
-    No states needed — start_handler always returns ConversationHandler.END.
+    No states needed - start_handler always returns ConversationHandler.END.
     """
     return ConversationHandler(
         entry_points=[CommandHandler("start", start_handler)],
@@ -1460,6 +1514,9 @@ def build_files_conversation() -> ConversationHandler:
             WAITING_NEW_BR_NAME: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, new_branch_name_handler),
             ],
+            WAITING_PROTECTED_BRANCH_NAME: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, protected_branch_name_handler),
+            ],
             CONFIRM_COMMIT: [
                 CallbackQueryHandler(commit_now_callback, pattern=r"^COMMIT_NOW$"),
                 CallbackQueryHandler(commit_force_callback, pattern=r"^COMMIT_FORCE$"),
@@ -1472,7 +1529,7 @@ def build_files_conversation() -> ConversationHandler:
 
 
 def build_auth_conversation() -> ConversationHandler:
-    """Device Flow /auth — no states needed, polling runs as background task."""
+    """Device Flow /auth - no states needed, polling runs as background task."""
     return ConversationHandler(
         entry_points=[CommandHandler("auth", auth_handler)],
         states={},

@@ -20,32 +20,32 @@ export function initStatusBar(): vscode.StatusBarItem {
 }
 
 export function setDisconnected(): void {
-  _statusBar.text = '$(warning) GitPhone — Disconnected';
-  _statusBar.tooltip = 'GitPhone: Not connected — click to set up';
+  _statusBar.text = '$(warning) GitPhone - Disconnected';
+  _statusBar.tooltip = 'GitPhone: Not connected - click to set up';
   _statusBar.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
 }
 
 export function setConnected(stagedCount: number = 0): void {
   _stagedCount = stagedCount;
-  _statusBar.text = `$(check) GitPhone — ${stagedCount} staged`;
+  _statusBar.text = `$(check) GitPhone - ${stagedCount} staged`;
   _statusBar.tooltip = `GitPhone: ${stagedCount} file(s) staged. Click to open panel.`;
   _statusBar.backgroundColor = undefined;
 }
 
 export function setSyncing(): void {
-  _statusBar.text = '$(sync~spin) GitPhone — Syncing...';
+  _statusBar.text = '$(sync~spin) GitPhone - Syncing...';
   _statusBar.tooltip = 'GitPhone: Syncing file to backend';
   _statusBar.backgroundColor = undefined;
 }
 
 export function setError(message: string): void {
-  _statusBar.text = '$(error) GitPhone — Error';
+  _statusBar.text = '$(error) GitPhone - Error';
   _statusBar.tooltip = `GitPhone error: ${message}`;
   _statusBar.backgroundColor = new vscode.ThemeColor('statusBarItem.errorBackground');
 }
 
 export function setInactive(): void {
-  _statusBar.text = '$(circle-slash) GitPhone — Inactive';
+  _statusBar.text = '$(circle-slash) GitPhone - Inactive';
   _statusBar.tooltip = 'GitPhone: Account dormant. Click to reactivate.';
   _statusBar.backgroundColor = undefined;
 }

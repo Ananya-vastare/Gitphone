@@ -1,5 +1,5 @@
 """
-supabase_service.py — All Supabase reads/writes for the MVP.
+supabase_service.py - All Supabase reads/writes for the MVP.
 Uses ONE central Supabase (ours). Users isolated by telegram_id.
 """
 
@@ -7,7 +7,7 @@ import os
 from typing import Optional
 from supabase import create_client, Client
 
-# ── Client Initialization ────────────────────────────────────────────────────
+# --- Client Initialization ------------------------------------------------------------------------------
 _supabase: Optional[Client] = None
 
 
@@ -20,7 +20,7 @@ def get_client() -> Client:
     return _supabase
 
 
-# ── User Operations ──────────────────────────────────────────────────────────
+# --- User Operations ---------------------------------------------------------------------------------------
 
 def get_user_by_telegram_id(telegram_id: str) -> Optional[dict]:
     """Returns user row or None if not registered."""
@@ -58,13 +58,13 @@ def update_last_active(telegram_id: str) -> None:
         print(f"[supabase] update_last_active error: {e}")
 
 
-# ── Staged Files Operations ──────────────────────────────────────────────────
+# --- Staged Files Operations ---------------------------------------------------------------------------
 
 def upsert_staged_file(payload: dict) -> Optional[dict]:
     """
     Upsert a staged file diff.
-    If an existing pending diff exists for the same (telegram_id, filepath) → update it.
-    Otherwise → insert new.
+    If an existing pending diff exists for the same (telegram_id, filepath) \u2192 update it.
+    Otherwise \u2192 insert new.
     Returns the saved row.
     """
     try:
@@ -144,7 +144,7 @@ def mark_files_committed(file_ids: list[str]) -> None:
         print(f"[supabase] mark_files_committed error: {e}")
 
 
-# ── Commit Log ───────────────────────────────────────────────────────────────
+# --- Commit Log ----------------------------------------------------------------------------------------------
 
 def insert_commit_log(log: dict) -> None:
     """Record a successful commit in the audit log."""
@@ -171,7 +171,7 @@ def get_recent_commits(telegram_id: str, limit: int = 10) -> list[dict]:
         return []
 
 
-# ── Active Repo Tracking ─────────────────────────────────────────────────────
+# --- Active Repo Tracking -------------------------------------------------------------------------------
 
 def update_active_repo(telegram_id: str, active_repo: str, active_branch: str) -> None:
     """Update the user's currently active repo/branch (auto-detected from VS Code)."""
@@ -262,7 +262,7 @@ def clear_all_staged(telegram_id: str) -> int:
         return 0
 
 
-# ── Admin Operations ─────────────────────────────────────────────────────────
+# --- Admin Operations -------------------------------------------------------------------------------------
 
 def ban_user(telegram_id: str, reason: str = "") -> bool:
     """Ban a user by telegram_id. Returns True if user existed."""
@@ -367,7 +367,7 @@ def mark_files_committed(file_ids: list[str]) -> bool:
         return False
 
 
-# ── Device Flow OAuth State ───────────────────────────────────────────────────
+# --- Device Flow OAuth State ----------------------------------------------------------------------------
 
 def save_device_flow_state(telegram_id: str, state: dict) -> bool:
     """Store GitHub Device Flow state (device_code, expires_at) in users table."""

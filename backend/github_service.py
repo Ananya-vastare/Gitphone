@@ -1,5 +1,5 @@
 """
-github_service.py — All GitHub API interactions via PyGithub.
+github_service.py - All GitHub API interactions via PyGithub.
 Handles token validation, SHA fetching, file commits, branch management, and PR creation.
 """
 
@@ -113,7 +113,7 @@ class GitHubService:
             g = Github(token)
             repo = g.get_repo(repo_name)
             file_obj = repo.get_contents(filepath, ref=branch)
-            # Handle list (directory) case — shouldn't happen but guard anyway
+            # Handle list (directory) case - shouldn't happen but guard anyway
             if isinstance(file_obj, list):
                 return {"exists": False, "sha": None, "content": ""}
             content = base64.b64decode(file_obj.content).decode("utf-8", errors="replace")
@@ -160,23 +160,23 @@ class GitHubService:
                 full_content_b64 = staged.get("full_content")
                 diff_text = staged.get("diff")
 
-                # ── Fetch current GitHub state ────────────────────────────
+                # --- Fetch current GitHub state ------------------------------------------
                 gh_file = self.get_file_sha_and_content(token, repo_name, branch, filepath)
                 current_sha = gh_file["sha"]
                 current_content = gh_file["content"]
                 is_new_file = not gh_file["exists"] or stored_base_sha == "new_file"
 
-                # ── Conflict check (skip for new files) ───────────────────
+                # --- Conflict check (skip for new files) ----------------------------
                 if not is_new_file and detect_conflict(stored_base_sha, current_sha):
                     conflict_files.append(filepath)
                     continue
 
-                # ── Handle deletions ───────────────────────────────────
+                # --- Handle deletions ----------------------------------------------------
                 change_type = staged.get("change_type", "modify")
                 if change_type == "delete" or stored_base_sha == "delete":
                     if not gh_file["exists"]:
-                        # File already deleted on GitHub — nothing to do
-                        print(f"[github_service] Skip delete {filepath} — not on GitHub")
+                        # File already deleted on GitHub - nothing to do
+                        print(f"[github_service] Skip delete {filepath} - not on GitHub")
                         continue
                     result = repo.delete_file(
                         path=filepath,
@@ -187,13 +187,13 @@ class GitHubService:
                     last_sha = result["commit"].sha
                     continue
 
-                # ── Reconstruct final content ─────────────────────────────
+                # --- Reconstruct final content -------------------------------------------
                 if is_binary or full_content_b64:
-                    # Binary or full-content file — decode base64 directly
+                    # Binary or full-content file - decode base64 directly
                     final_bytes = base64.b64decode(full_content_b64)
                     content_to_commit = final_bytes
                 else:
-                    # Text file — apply diff to current GitHub content
+                    # Text file - apply diff to current GitHub content
                     base_content = current_content if not is_new_file else ""
                     new_content, success = apply_diff(base_content, diff_text)
                     if not success:
@@ -202,7 +202,7 @@ class GitHubService:
                     new_content = new_content.replace("\r\n", "\n")
                     content_to_commit = new_content.encode("utf-8")
 
-                # ── Commit to GitHub ──────────────────────────────────────
+                # --- Commit to GitHub ---------------------------------------------------------
                 if is_new_file:
                     result = repo.create_file(
                         path=filepath,
@@ -220,7 +220,7 @@ class GitHubService:
                     )
                 last_sha = result["commit"].sha
 
-            # ── Return result ─────────────────────────────────────────────
+            # --- Return result -------------------------------------------------------------------
             if conflict_files and not last_sha:
                 return {
                     "ok": False,
@@ -239,7 +239,10 @@ class GitHubService:
             if e.status == 409:
                 return {"ok": False, "error": "conflict", "message": "SHA conflict on GitHub"}
             if e.status == 422:
-                return {"ok": False, "error": "branch_protected", "message": "Branch has protection rules"}
+                msg = str(e.data.get("message", ""))
+                if "protected" in msg.lower() or "required" in msg.lower():
+                    return {"ok": False, "error": "branch_protected", "message": f"Branch is protected: {msg}"}
+                return {"ok": False, "error": "validation_failed", "message": f"GitHub validation failed: {msg}"}
             return {"ok": False, "error": "github_error", "message": str(e.data)}
         except Exception as e:
             print(f"[github_service] commit_files error: {e}")
@@ -254,7 +257,7 @@ class GitHubService:
         commit_message: str,
     ) -> dict:
         """
-        Force commit — overwrites GitHub content with staged version.
+        Force commit - overwrites GitHub content with staged version.
         Used when user chooses 'Force Commit' on conflict screen.
         Fetches the CURRENT GitHub SHA (to satisfy the API) but ignores base_sha.
         """

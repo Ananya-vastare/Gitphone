@@ -12,18 +12,18 @@ import {
 } from './stagedFilesProvider';
 import axios from 'axios';
 
-// ── Global provider instance ─────────────────────────────────────────────────
+// --- Global provider instance -------------------------------------------------
 let sidebarProvider: GitPhoneSidebarProvider;
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   console.log('[GitPhone] Extension activating...');
 
-  // ── Initialize modules ────────────────────────────────────────────────────
+  // --- Initialize modules ----------------------------------------------------
   initConfig(context);
   initCache(context);
   initStatusBar();
 
-  // ── Sidebar TreeView ──────────────────────────────────────────────────────
+  // --- Sidebar TreeView ------------------------------------------------------
   sidebarProvider = new GitPhoneSidebarProvider();
   const treeView = vscode.window.createTreeView('gitphone.stagedFiles', {
     treeDataProvider: sidebarProvider,
@@ -46,7 +46,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     setConnected(staged);
   });
 
-  // ── Register commands ─────────────────────────────────────────────────────
+  // --- Register commands -----------------------------------------------------
   context.subscriptions.push(
 
     // Setup panel
@@ -73,7 +73,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       if (!item?.change || !sidebarProvider.repository) return;
       try {
         await sidebarProvider.repository.add([item.change.uri]);
-        // git API fires onDidChange → sidebar updates automatically
+        // git API fires onDidChange -> sidebar updates automatically
       } catch (err: any) {
         vscode.window.showErrorMessage(`Failed to stage: ${err.message}`);
       }
@@ -96,7 +96,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       await showFileDiff(change, section, repoRoot);
     }),
 
-    // Sync STAGED files to GitPhone backend → appear in Telegram /files
+    // Sync STAGED files to GitPhone backend -> appear in Telegram /files
     vscode.commands.registerCommand('gitphone.syncToTelegram', async () => {
       await syncStagedToBackend(sidebarProvider, context);
     }),
@@ -125,26 +125,26 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       const lines: string[] = ['\n=== GitPhone Diagnostics ===\n'];
 
       if (!config) {
-        lines.push('❌ NOT CONFIGURED - run Connect GitPhone first');
+        lines.push('x NOT CONFIGURED - run Connect GitPhone first');
         vscode.window.showErrorMessage('GitPhone not configured. Open Setup first.');
         return;
       }
 
-      lines.push(`✅ Telegram ID : ${config.telegramId}`);
-      lines.push(`✅ Repo         : ${config.defaultRepo}`);
-      lines.push(`✅ Branch       : ${config.branch}`);
-      lines.push(`✅ Backend URL  : ${config.backendUrl}`);
+      lines.push(`[OK] Telegram ID : ${config.telegramId}`);
+      lines.push(`[OK] Repo         : ${config.defaultRepo}`);
+      lines.push(`[OK] Branch       : ${config.branch}`);
+      lines.push(`[OK] Backend URL  : ${config.backendUrl}`);
 
       const repo = sidebarProvider.repository;
-      lines.push(`✅ Git repo     : ${repo?.rootUri.fsPath ?? 'NOT FOUND'}`);
-      lines.push(`✅ Staged       : ${sidebarProvider.stagedChanges.length} file(s)`);
-      lines.push(`✅ Changed      : ${sidebarProvider.workingTreeChanges.length} file(s)`);
+      lines.push(`[OK] Git repo     : ${repo?.rootUri.fsPath ?? 'NOT FOUND'}`);
+      lines.push(`[OK] Staged       : ${sidebarProvider.stagedChanges.length} file(s)`);
+      lines.push(`[OK] Changed      : ${sidebarProvider.workingTreeChanges.length} file(s)`);
 
       try {
         const health = await axios.get(`${config.backendUrl}/health`, { timeout: 8000 });
-        lines.push(`✅ Backend health: ${JSON.stringify(health.data)}`);
+        lines.push(`[OK] Backend health: ${JSON.stringify(health.data)}`);
       } catch (e: any) {
-        lines.push(`❌ Backend UNREACHABLE: ${e.message}`);
+        lines.push(`[Error] Backend UNREACHABLE: ${e.message}`);
       }
 
       const output = lines.join('\n');
@@ -155,13 +155,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }),
   );
 
-  // ── Startup logic ─────────────────────────────────────────────────────────
+  // --- Startup logic ---------------------------------------------------------
   if (isConfigured()) {
     await onStartupConfigured(context);
   } else {
     setDisconnected();
     const choice = await vscode.window.showInformationMessage(
-      '📱 GitPhone is not configured yet. Set it up to start committing from Telegram!',
+      'GitPhone is not configured yet. Set it up to start committing from Telegram!',
       'Open Setup',
       'Later',
     );
@@ -171,7 +171,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   }
 
   context.subscriptions.push({ dispose: disposeStatusBar });
-  console.log('[GitPhone] Extension activated ✅');
+  console.log('[GitPhone] Extension activated [OK]');
 }
 
 /**
@@ -195,7 +195,7 @@ async function onStartupConfigured(context: vscode.ExtensionContext): Promise<vo
 }
 
 /**
- * Schema version check — notifies user if backend has a newer schema.
+ * Schema version check - notifies user if backend has a newer schema.
  */
 async function checkSchemaVersion(): Promise<void> {
   try {
@@ -206,7 +206,7 @@ async function checkSchemaVersion(): Promise<void> {
 
     if (serverVersion > localVersion) {
       const choice = await vscode.window.showWarningMessage(
-        `GitPhone schema update required (v${localVersion} → v${serverVersion})`,
+        `GitPhone schema update required (v${localVersion} -> v${serverVersion})`,
         'How To Update',
         'Copy SQL',
         'Later',
@@ -222,7 +222,7 @@ async function checkSchemaVersion(): Promise<void> {
       }
     }
   } catch {
-    // Backend unreachable — already handled in onStartupConfigured
+    // Backend unreachable - already handled in onStartupConfigured
   }
 }
 
@@ -239,7 +239,7 @@ async function showStatusMenu(): Promise<void> {
   const items = [
     {
       label: '$(info) GitPhone Status',
-      description: `${config.defaultRepo} • ${config.branch} — ${staged}S ${changed}M`,
+      description: `${config.defaultRepo} - ${config.branch} - ${staged}S ${changed}M`,
       action: 'status',
     },
     {
@@ -277,7 +277,7 @@ async function showStatusMenu(): Promise<void> {
       break;
     case 'status':
       vscode.window.showInformationMessage(
-        `GitPhone ✅\nRepo: ${config.defaultRepo} • ${config.branch}\nBackend: ${config.backendUrl}`,
+        `GitPhone [OK]\nRepo: ${config.defaultRepo} - ${config.branch}\nBackend: ${config.backendUrl}`,
       );
       break;
   }

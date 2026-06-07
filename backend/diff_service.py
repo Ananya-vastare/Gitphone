@@ -1,5 +1,5 @@
 """
-diff_service.py — Apply unified diffs via Google's diff-match-patch library.
+diff_service.py - Apply unified diffs via Google's diff-match-patch library.
 Used at commit time to reconstruct file content from stored diff + GitHub base.
 """
 

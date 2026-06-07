@@ -1,5 +1,5 @@
 """
-routes/sync.py â€” POST /sync-file
+routes/sync.py - POST /sync-file
 Called by VS Code extension on every file save.
 Stores the diff in Supabase staged_files.
 Auto-updates active_repo/active_branch from the extension's git detection.
@@ -30,14 +30,14 @@ async def sync_file(payload: SyncFilePayload, _auth: str = Depends(require_api_k
                 detail="User not registered. Complete setup in VS Code first."
             )
 
-        # Step 2: File size guard (defense in depth â€” extension checks first)
+        # Step 2: File size guard (defense in depth - extension checks first)
         if payload.file_size > MAX_FILE_SIZE:
             raise HTTPException(
                 status_code=413,
                 detail=f"File exceeds 10MB limit ({payload.file_size} bytes)"
             )
 
-        # Step 3: Validate content — deletions are allowed with no diff/content
+        # Step 3: Validate content - deletions are allowed with no diff/content
         is_deletion = payload.change_type == "delete" or payload.base_sha == "delete"
         if not is_deletion and not payload.diff and not payload.full_content:
             raise HTTPException(

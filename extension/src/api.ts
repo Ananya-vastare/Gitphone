@@ -56,12 +56,12 @@ function authHeaders(): Record<string, string> {
   };
 }
 
-// ── Public endpoints (no auth) ───────────────────────────────────────────────
+// --- Public endpoints (no auth) -----------------------------------------------
 
 export async function register(payload: RegisterPayload): Promise<RegisterResponse> {
   const response = await axios.post<RegisterResponse>(`${baseUrl()}/register`, payload, {
     timeout: 15000,
-    // No auth headers — this is the endpoint that creates the key
+    // No auth headers - this is the endpoint that creates the key
   });
   return response.data;
 }
@@ -82,7 +82,7 @@ export async function healthCheck(): Promise<boolean> {
   }
 }
 
-// ── Authenticated endpoints (require X-Telegram-Id + X-Api-Key) ─────────────
+// --- Authenticated endpoints (require X-Telegram-Id + X-Api-Key) -------------
 
 export async function syncFile(payload: SyncFilePayload): Promise<SyncFileResponse> {
   const response = await axios.post<SyncFileResponse>(`${baseUrl()}/sync-file`, payload, {

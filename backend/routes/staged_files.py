@@ -1,9 +1,9 @@
 """
-routes/staged_files.py — Staged file management endpoints.
+routes/staged_files.py - Staged file management endpoints.
 
-GET  /staged-files/{telegram_id}   — list pending staged files (extension sidebar)
-POST /staged-files/clear-all       — clear all staged files for a user
-POST /commit-direct                — commit directly from VS Code (no Telegram)
+GET  /staged-files/{telegram_id}   - list pending staged files (extension sidebar)
+POST /staged-files/clear-all       - clear all staged files for a user
+POST /commit-direct                - commit directly from VS Code (no Telegram)
 """
 
 from fastapi import APIRouter, HTTPException, Depends, Request
@@ -21,7 +21,7 @@ from auth import require_api_key
 router = APIRouter()
 
 
-# ── GET /staged-files/{telegram_id} ──────────────────────────────────────────
+# --- GET /staged-files/{telegram_id} ------------------------------------------
 
 @router.get("/staged-files/{telegram_id}")
 async def list_staged_files(telegram_id: str, _auth: str = Depends(require_api_key)):
@@ -58,7 +58,7 @@ async def list_staged_files(telegram_id: str, _auth: str = Depends(require_api_k
     }
 
 
-# ── POST /staged-files/clear-all ─────────────────────────────────────────────
+# --- POST /staged-files/clear-all ---------------------------------------------
 
 @router.post("/staged-files/clear-all")
 async def clear_all_route(request: Request, _auth: str = Depends(require_api_key)):
@@ -75,7 +75,7 @@ async def clear_all_route(request: Request, _auth: str = Depends(require_api_key
     return {"ok": True, "message": "All staged files cleared."}
 
 
-# ── POST /commit-direct ───────────────────────────────────────────────────────
+# --- POST /commit-direct ------------------------------------------------------
 
 class DirectCommitPayload(BaseModel):
     telegram_id: str
@@ -135,7 +135,7 @@ async def commit_direct(payload: DirectCommitPayload, _auth: str = Depends(requi
             conflict_files = result.get("conflict_files", [])
             raise HTTPException(
                 status_code=409,
-                detail=f"Conflict in: {', '.join(conflict_files)}. Use /files in Telegram → Force Commit.",
+                detail=f"Conflict in: {', '.join(conflict_files)}. Use /files in Telegram \u2192 Force Commit.",
             )
         raise HTTPException(
             status_code=500,

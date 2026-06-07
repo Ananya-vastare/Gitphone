@@ -1,5 +1,5 @@
 """
-routes/version.py — GET /version
+routes/version.py - GET /version
 Called by VS Code extension on startup for schema version check.
 """
 

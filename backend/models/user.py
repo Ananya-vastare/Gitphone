@@ -23,5 +23,5 @@ class UserResponse(BaseModel):
     ok: bool
     message: str
     telegram_id: Optional[str] = None
-    api_key: Optional[str] = None      # Returned ONCE at registration — store it securely
+    api_key: Optional[str] = None      # Returned ONCE at registration - store it securely
     error: Optional[str] = None

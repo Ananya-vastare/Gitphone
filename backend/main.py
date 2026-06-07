@@ -1,5 +1,5 @@
 """
-main.py — FastAPI app entry point.
+main.py - FastAPI app entry point.
 Combines FastAPI HTTP routes + python-telegram-bot webhook in one process.
 Deployed on Render (free tier, webhook mode = no sleeping).
 """
@@ -35,14 +35,14 @@ from admin import register_admin_handlers
 from channel_logger import init_logger, log_startup, log_shutdown
 from telegram.ext import CommandHandler, CallbackQueryHandler
 
-# ── Build Telegram Application ────────────────────────────────────────────────
+# --- Build Telegram Application ------------------------------------------------------------------------
 telegram_app = (
     Application.builder()
     .token(os.environ["TELEGRAM_BOT_TOKEN"])
     .build()
 )
 
-# Conversation handlers (order matters — most specific first)
+# Conversation handlers (order matters - most specific first)
 telegram_app.add_handler(build_start_conversation())
 telegram_app.add_handler(build_files_conversation())
 telegram_app.add_handler(build_auth_conversation())
@@ -74,7 +74,7 @@ register_admin_handlers(telegram_app)
 
 
 
-# ── FastAPI Lifespan ──────────────────────────────────────────────────────────
+# --- FastAPI Lifespan ---------------------------------------------------------------------------------------
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Set webhook on startup, clean up on shutdown."""
@@ -100,13 +100,13 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="GitPhone API",
-    description="GitHub commits from Telegram — backend service",
+    description="GitHub commits from Telegram - backend service",
     version="1.0.0",
     lifespan=lifespan,
 )
 
 
-# ── Telegram Webhook Route ────────────────────────────────────────────────────
+# --- Telegram Webhook Route ------------------------------------------------------------------------------
 @app.post("/webhook")
 async def telegram_webhook(request: Request):
     data = await request.json()
@@ -115,7 +115,7 @@ async def telegram_webhook(request: Request):
     return {"ok": True}
 
 
-# ── API Routes ────────────────────────────────────────────────────────────────
+# --- API Routes ------------------------------------------------------------------------------------------------
 from routes.register import router as register_router
 from routes.sync import router as sync_router
 from routes.version import router as version_router
@@ -131,7 +131,7 @@ app.include_router(unstage_router)
 app.include_router(auth_router)
 
 
-# ── Health Check ─────────────────────────────────────────────────────────────
+# --- Health Check -------------------------------------------------------------------------------------------
 @app.get("/health")
 async def health():
     return {"status": "ok", "service": "gitphone", "version": "1.0.0"}

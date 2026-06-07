@@ -68,32 +68,15 @@ const GitStatus = {
 
 // ── Tree Item Types ───────────────────────────────────────────────────────────
 
-export type SectionType = 'staged' | 'changes';
-
-export class SectionHeaderItem extends vscode.TreeItem {
-  constructor(
-    public readonly section: SectionType,
-    public readonly count: number,
-  ) {
-    super(
-      section === 'staged'
-        ? `Staged Changes (${count})`
-        : `Changes (${count})`,
-      vscode.TreeItemCollapsibleState.Expanded,
-    );
-    this.contextValue = 'section';
-    this.iconPath = new vscode.ThemeIcon(section === 'staged' ? 'check' : 'diff');
-  }
-}
-
 export class FileItem extends vscode.TreeItem {
   constructor(
     public readonly change: GitChange,
-    public readonly section: SectionType,
     repoRoot: string,
   ) {
-    const relPath = path.relative(repoRoot, change.uri.fsPath);
-    const parts = relPath.replace(/\\/g, '/').split('/');
+    const fsPath = change.uri.fsPath;
+    const relPath = path.relative(repoRoot, fsPath);
+    const normalizedRelPath = relPath.replace(/\\/g, '/');
+    const parts = normalizedRelPath.split('/');
     const filename = parts[parts.length - 1];
     const dir = parts.slice(0, -1).join('/');
 
@@ -101,25 +84,23 @@ export class FileItem extends vscode.TreeItem {
 
     this.description = dir;
     this.resourceUri = change.uri;
-    this.contextValue = section === 'staged' ? 'stagedFile' : 'changedFile';
+    this.contextValue = 'fileToSync';
 
     // Status letter + color
-    const { letter, icon, color } = _statusInfo(change.status, section);
+    const { letter, icon, color } = _statusInfo(change.status);
     this.description = `${dir}  ${letter}`;
     this.iconPath = new vscode.ThemeIcon(icon, new vscode.ThemeColor(color));
 
     this.tooltip = new vscode.MarkdownString(
-      `**${relPath}**\n\n${_statusLabel(change.status, section)}\n\n` +
-      (section === 'staged'
-        ? '_Click to view diff — right-click to unstage_'
-        : '_Click to view diff — click **+** to stage_')
+      `**${normalizedRelPath}**\n\n${_statusLabel(change.status)}\n\n` +
+      '_Click to view diff — click sync to send to Telegram_'
     );
 
     // Clicking the file shows diff
     this.command = {
       command: 'gitphone.showFileDiff',
       title: 'Show Diff',
-      arguments: [change, section, repoRoot],
+      arguments: [change, 'changes', repoRoot],
     };
   }
 }
@@ -199,12 +180,22 @@ export class GitPhoneSidebarProvider
     return this._repo;
   }
 
-  get stagedChanges(): GitChange[] {
-    return this._repo?.state.indexChanges ?? [];
-  }
-
-  get workingTreeChanges(): GitChange[] {
-    return this._repo?.state.workingTreeChanges ?? [];
+  /**
+   * Returns all changes (staged + working tree) merged and unique by path.
+   */
+  get allChanges(): GitChange[] {
+    if (!this._repo) return [];
+    
+    const staged = this._repo.state.indexChanges || [];
+    const working = this._repo.state.workingTreeChanges || [];
+    
+    // Unique by fsPath. If a file is in both, the staged one is usually what we want to see,
+    // but for syncing we just need one entry.
+    const map = new Map<string, GitChange>();
+    for (const c of working) map.set(c.uri.fsPath, c);
+    for (const c of staged) map.set(c.uri.fsPath, c);
+    
+    return Array.from(map.values());
   }
 
   getTreeItem(element: vscode.TreeItem): vscode.TreeItem {
@@ -219,48 +210,20 @@ export class GitPhoneSidebarProvider
       return [new MessageItem('No Git repository in workspace', 'git-branch')];
     }
 
+    if (element) return [];
+
     const repoRoot = this._repo.rootUri.fsPath;
-    const staged  = this._repo.state.indexChanges;
-    const changed = this._repo.state.workingTreeChanges;
+    const changes = this.allChanges;
 
-    // Top-level: section headers
-    if (!element) {
-      const items: vscode.TreeItem[] = [];
-
-      if (staged.length > 0) {
-        items.push(new SectionHeaderItem('staged', staged.length));
+    if (changes.length === 0) {
+      const items = [new MessageItem('No changes detected', 'check', 'Working tree clean')];
+      if (isConfigured()) {
+        items.push(new MessageItem('GitPhone connected', 'plug', 'Save files to sync via Telegram'));
       }
-      if (changed.length > 0) {
-        items.push(new SectionHeaderItem('changes', changed.length));
-      }
-      if (staged.length === 0 && changed.length === 0) {
-        items.push(new MessageItem(
-          'No changes detected',
-          'check',
-          'Working tree clean'
-        ));
-        if (isConfigured()) {
-          items.push(new MessageItem(
-            'GitPhone connected',
-            'plug',
-            'Save files to stage via Telegram'
-          ));
-        }
-      }
-
       return items;
     }
 
-    // Children of section headers
-    if (element instanceof SectionHeaderItem) {
-      if (element.section === 'staged') {
-        return staged.map(c => new FileItem(c, 'staged', repoRoot));
-      } else {
-        return changed.map(c => new FileItem(c, 'changes', repoRoot));
-      }
-    }
-
-    return [];
+    return changes.map(c => new FileItem(c, repoRoot));
   }
 }
 
@@ -268,37 +231,18 @@ export class GitPhoneSidebarProvider
 
 /**
  * Show a VS Code diff for a file.
- * For staged files: diff against HEAD (what was last committed).
- * For working tree files: diff current vs. saved.
  */
 export async function showFileDiff(
   change: GitChange,
-  section: SectionType,
+  section: string,
   repoRoot: string,
 ): Promise<void> {
-  if (section === 'staged') {
-    // Diff: HEAD version vs index (staged) version
-    const title = `${path.basename(change.uri.fsPath)} (staged)`;
-    try {
-      await vscode.commands.executeCommand(
-        'vscode.diff',
-        change.originalUri.with({ scheme: 'git', query: 'HEAD' }),
-        change.uri.with({ scheme: 'git', query: '~' }),  // index
-        `${title}`,
-        { preview: true },
-      );
-      return;
-    } catch {
-      // Fallback to simple open
-    }
-  }
-  // Working tree: open the actual file
+  // Always try to open the actual file for single-phase sync
   await vscode.window.showTextDocument(change.uri, { preview: true });
 }
 
 /**
- * Sync currently staged git files to the GitPhone backend (so they appear in Telegram /files).
- * This replaces the old file-save-watcher approach.
+ * Sync all modified files to the GitPhone backend.
  */
 export async function syncStagedToBackend(
   provider: GitPhoneSidebarProvider,
@@ -310,16 +254,16 @@ export async function syncStagedToBackend(
     return;
   }
 
-  const staged = provider.stagedChanges;
-  if (staged.length === 0) {
-    vscode.window.showInformationMessage('No staged files to sync. Stage files with git first.');
+  const changes = provider.allChanges;
+  if (changes.length === 0) {
+    vscode.window.showInformationMessage('No modified files to sync.');
     return;
   }
 
   await vscode.window.withProgress(
     {
       location: vscode.ProgressLocation.Notification,
-      title: 'GitPhone: Syncing staged files...',
+      title: 'GitPhone: Syncing all changes...',
       cancellable: false,
     },
     async (progress) => {
@@ -328,8 +272,8 @@ export async function syncStagedToBackend(
       const activeRepo = config.defaultRepo;
       const activeBranch = provider.repository?.state.HEAD?.name || config.branch;
 
-      for (const change of staged) {
-        progress.report({ message: `${synced + 1}/${staged.length}: ${path.basename(change.uri.fsPath)}` });
+      for (const change of changes) {
+        progress.report({ message: `${synced + 1}/${changes.length}: ${path.basename(change.uri.fsPath)}` });
         try {
           const content = await vscode.workspace.fs.readFile(change.uri);
           const changeType = _gitChangeType(change.status);
@@ -337,10 +281,10 @@ export async function syncStagedToBackend(
           const payload: SyncFilePayload = {
             telegram_id: config.telegramId,
             filepath: _relPath(change.uri.fsPath, provider.repository!.rootUri.fsPath),
-            diff: null, // Sending full content for staged files
+            diff: null,
             full_content: Buffer.from(content).toString('base64'),
             base_sha: changeType === 'create' ? 'new_file' : baseSha,
-            is_binary: false, // TODO: detect binary
+            is_binary: false,
             file_size: content.length,
             active_repo: activeRepo,
             active_branch: activeBranch,
@@ -364,37 +308,25 @@ export async function syncStagedToBackend(
 
 // --- Helpers -------------------------------------------------------------------
 
-function _statusInfo(status: number, section: SectionType): { letter: string; icon: string; color: string } {
-  if (section === 'staged') {
-    switch (status) {
-      case GitStatus.INDEX_ADDED:    return { letter: 'A', icon: 'diff-added',    color: 'gitDecoration.addedResourceForeground' };
-      case GitStatus.INDEX_DELETED:  return { letter: 'D', icon: 'diff-removed',  color: 'gitDecoration.deletedResourceForeground' };
-      case GitStatus.INDEX_RENAMED:  return { letter: 'R', icon: 'diff-renamed',  color: 'gitDecoration.renamedResourceForeground' };
-      default:                       return { letter: 'M', icon: 'diff-modified', color: 'gitDecoration.modifiedResourceForeground' };
-    }
-  } else {
-    switch (status) {
-      case GitStatus.UNTRACKED:      return { letter: 'U', icon: 'question',      color: 'gitDecoration.untrackedResourceForeground' };
-      case GitStatus.DELETED:        return { letter: 'D', icon: 'diff-removed',  color: 'gitDecoration.deletedResourceForeground' };
-      default:                       return { letter: 'M', icon: 'diff-modified', color: 'gitDecoration.modifiedResourceForeground' };
-    }
+function _statusInfo(status: number): { letter: string; icon: string; color: string } {
+  switch (status) {
+    case GitStatus.INDEX_ADDED:
+    case GitStatus.UNTRACKED:     return { letter: 'A', icon: 'diff-added',    color: 'gitDecoration.addedResourceForeground' };
+    case GitStatus.INDEX_DELETED:
+    case GitStatus.DELETED:       return { letter: 'D', icon: 'diff-removed',  color: 'gitDecoration.deletedResourceForeground' };
+    case GitStatus.INDEX_RENAMED: return { letter: 'R', icon: 'diff-renamed',  color: 'gitDecoration.renamedResourceForeground' };
+    default:                      return { letter: 'M', icon: 'diff-modified', color: 'gitDecoration.modifiedResourceForeground' };
   }
 }
 
-function _statusLabel(status: number, section: SectionType): string {
-  if (section === 'staged') {
-    switch (status) {
-      case GitStatus.INDEX_ADDED:   return 'Added (staged)';
-      case GitStatus.INDEX_DELETED: return 'Deleted (staged)';
-      case GitStatus.INDEX_RENAMED: return 'Renamed (staged)';
-      default:                      return 'Modified (staged)';
-    }
-  } else {
-    switch (status) {
-      case GitStatus.UNTRACKED:     return 'Untracked';
-      case GitStatus.DELETED:       return 'Deleted';
-      default:                      return 'Modified';
-    }
+function _statusLabel(status: number): string {
+  switch (status) {
+    case GitStatus.INDEX_ADDED:
+    case GitStatus.UNTRACKED:     return 'Added / Untracked';
+    case GitStatus.INDEX_DELETED:
+    case GitStatus.DELETED:       return 'Deleted';
+    case GitStatus.INDEX_RENAMED: return 'Renamed';
+    default:                      return 'Modified';
   }
 }
 

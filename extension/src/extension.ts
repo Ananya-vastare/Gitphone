@@ -32,18 +32,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   context.subscriptions.push(treeView);
   context.subscriptions.push({ dispose: () => sidebarProvider.dispose() });
 
-  // Badge = staged + changed count (fires every time git state changes)
+  // Badge = total changes (fires every time git state changes)
   sidebarProvider.onDidChangeTreeData(() => {
-    const staged  = sidebarProvider.stagedChanges.length;
-    const changed = sidebarProvider.workingTreeChanges.length;
-    const total   = staged + changed;
+    const total = sidebarProvider.allChanges.length;
     treeView.title = total > 0
-      ? `Source Control (${staged}S ${changed}M)`
+      ? `Source Control (${total}M)`
       : 'Source Control';
     treeView.badge = total > 0
-      ? { tooltip: `${staged} staged, ${changed} changed`, value: total }
+      ? { tooltip: `${total} files changed`, value: total }
       : undefined;
-    setConnected(staged);
+    setConnected(total);
   });
 
   // --- Register commands -----------------------------------------------------
@@ -68,29 +66,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       sidebarProvider.refresh();
     }),
 
-    // Stage a file from the CHANGES section (click + icon)
-    vscode.commands.registerCommand('gitphone.stageFile', async (item: any) => {
-      const uri = item?.change?.uri || item?.resourceUri || (item instanceof vscode.Uri ? item : undefined);
-      if (!uri || !sidebarProvider.repository) return;
-      try {
-        await sidebarProvider.repository.add([uri]);
-        // git API fires onDidChange -> sidebar updates automatically
-      } catch (err: any) {
-        vscode.window.showErrorMessage(`Failed to stage: ${err.message}`);
-      }
-    }),
-
-    // Unstage a file from the STAGED section (click - icon)
-    vscode.commands.registerCommand('gitphone.unstageFile', async (item: any) => {
-      const uri = item?.change?.uri || item?.resourceUri || (item instanceof vscode.Uri ? item : undefined);
-      if (!uri || !sidebarProvider.repository) return;
-      try {
-        await sidebarProvider.repository.revert([uri]);
-      } catch (err: any) {
-        vscode.window.showErrorMessage(`Failed to unstage: ${err.message}`);
-      }
-    }),
-
     // Show diff when clicking a file
     vscode.commands.registerCommand('gitphone.showFileDiff', async (
       change: any, section: any, repoRoot: string
@@ -98,7 +73,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       await showFileDiff(change, section, repoRoot);
     }),
 
-    // Sync STAGED files to GitPhone backend -> appear in Telegram /files
+    // Sync ALL modified files to GitPhone backend -> appear in Telegram /files
     vscode.commands.registerCommand('gitphone.syncToTelegram', async () => {
       await syncStagedToBackend(sidebarProvider, context);
     }),
@@ -139,8 +114,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
       const repo = sidebarProvider.repository;
       lines.push(`[OK] Git repo     : ${repo?.rootUri.fsPath ?? 'NOT FOUND'}`);
-      lines.push(`[OK] Staged       : ${sidebarProvider.stagedChanges.length} file(s)`);
-      lines.push(`[OK] Changed      : ${sidebarProvider.workingTreeChanges.length} file(s)`);
+      const totalChanges = sidebarProvider.allChanges.length;
+      lines.push(`[OK] Changes      : ${totalChanges} file(s)`);
 
       try {
         const health = await axios.get(`${config.backendUrl}/health`, { timeout: 8000 });

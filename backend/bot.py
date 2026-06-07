@@ -211,6 +211,12 @@ async def auth_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     """Start GitHub Device Flow. User enters a code on github.com/login/device."""
     telegram_id = str(update.effective_user.id)
 
+    # Cancel any existing auth task for this user
+    old_task = context.user_data.get("auth_task")
+    if old_task and not old_task.done():
+        old_task.cancel()
+        print(f"[auth] Cancelled previous auth task for {telegram_id}")
+
     if not GITHUB_CLIENT_ID:
         await update.message.reply_text(
             "[X] GitHub OAuth not configured.\n\n"
@@ -219,7 +225,7 @@ async def auth_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         )
         return ConversationHandler.END
 
-    await update.message.reply_text("[Admin] Starting GitHub sign-in...")
+    await update.message.reply_text("\U0001f504 Contacting GitHub...")
 
     # Step 1: Request device code
     try:
@@ -247,10 +253,8 @@ async def auth_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     expires_in       = data.get("expires_in", 900)
     interval         = data.get("interval", 5)
 
-    # Store in context for polling
-    context.user_data["device_code"]  = device_code
-    context.user_data["poll_interval"] = interval
-    context.user_data["auth_expires"]  = asyncio.get_event_loop().time() + expires_in
+    # Store state
+    context.user_data["device_code"] = device_code
 
     await update.message.reply_text(
         f"[Admin] *Sign in with GitHub*\n\n"
@@ -265,8 +269,8 @@ async def auth_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         disable_web_page_preview=True,
     )
 
-    # Start background polling
-    asyncio.create_task(_poll_device_auth(
+    # Start background polling and store task
+    task = asyncio.create_task(_poll_device_auth(
         telegram_id=telegram_id,
         device_code=device_code,
         interval=interval,
@@ -274,6 +278,8 @@ async def auth_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         context=context,
         chat_id=update.effective_chat.id,
     ))
+    context.user_data["auth_task"] = task
+    
     return ConversationHandler.END
 
 
@@ -290,70 +296,92 @@ async def _poll_device_auth(
     deadline = time.time() + expires_in
     poll_interval = interval
 
-    while time.time() < deadline:
-        await asyncio.sleep(poll_interval)
+    print(f"[_poll_device_auth] Started polling for {telegram_id} (expires in {expires_in}s)")
 
-        try:
-            async with httpx.AsyncClient() as client:
-                resp = await client.post(
-                    TOKEN_URL,
-                    data={
-                        "client_id": GITHUB_CLIENT_ID,
-                        "client_secret": GITHUB_CLIENT_SECRET,
-                        "device_code": device_code,
-                        "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
-                    },
-                    headers={"Accept": "application/json"},
-                    timeout=10,
+    try:
+        while time.time() < deadline:
+            await asyncio.sleep(poll_interval)
+
+            try:
+                async with httpx.AsyncClient() as client:
+                    resp = await client.post(
+                        TOKEN_URL,
+                        data={
+                            "client_id": GITHUB_CLIENT_ID,
+                            "client_secret": GITHUB_CLIENT_SECRET,
+                            "device_code": device_code,
+                            "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
+                        },
+                        headers={"Accept": "application/json"},
+                        timeout=10,
+                    )
+                data = resp.json()
+            except Exception as e:
+                print(f"[_poll_device_auth] Network error: {e}")
+                continue
+
+            if "access_token" in data:
+                token = data["access_token"]
+                username = github_service.get_username(token)
+                print(f"[_poll_device_auth] Success for {telegram_id} ({username})")
+                
+                # Store token - handle new users by providing required default_repo
+                user = get_user_by_telegram_id(telegram_id)
+                if user:
+                    update_github_token(telegram_id, token)
+                else:
+                    upsert_user({
+                        "telegram_id": telegram_id, 
+                        "github_token": token,
+                        "default_repo": "not-set", # Required column
+                        "branch": "main"
+                    })
+
+                await context.bot.send_message(
+                    chat_id=chat_id,
+                    text=(
+                        f"\u2705 *GitHub connected!*\n\n"
+                        f"Signed in as *{username or 'your account'}*\n\n"
+                        f"Now set your repository with:\n"
+                        f"`/repo owner/repo-name`"
+                    ),
+                    parse_mode=ParseMode.MARKDOWN,
                 )
-            data = resp.json()
-        except Exception:
-            continue
+                return
 
-        if "access_token" in data:
-            token = data["access_token"]
-            # Get GitHub username
-            username = github_service.get_username(token)
-            # Store token
-            user = get_user_by_telegram_id(telegram_id)
-            if user:
-                update_github_token(telegram_id, token)
-            else:
-                upsert_user({"telegram_id": telegram_id, "github_token": token})
+            error = data.get("error", "")
+            if error == "slow_down":
+                poll_interval = data.get("interval", poll_interval + 5)
+            elif error == "expired_token":
+                print(f"[_poll_device_auth] Token expired for {telegram_id}")
+                await context.bot.send_message(
+                    chat_id=chat_id,
+                    text="[X] Authorization expired. Use /auth to try again.",
+                )
+                return
+            elif error not in ("authorization_pending", "slow_down", ""):
+                print(f"[_poll_device_auth] GitHub error for {telegram_id}: {error}")
+                await context.bot.send_message(
+                    chat_id=chat_id,
+                    text=f"[X] GitHub Auth error: `{error}`\nUse /auth to try again.",
+                    parse_mode=ParseMode.MARKDOWN
+                )
+                return
 
-            # Notify user
-            await context.bot.send_message(
-                chat_id=chat_id,
-                text=(
-                    f"[OK] *GitHub connected!*\n\n"
-                    f"Signed in as *{username or 'your GitHub account'}*\n\n"
-                    f"Now set your default repo with:\n"
-                    f"`/repo owner/repo-name`"
-                ),
-                parse_mode=ParseMode.MARKDOWN,
-            )
-            return
+        print(f"[_poll_device_auth] Deadline reached for {telegram_id}")
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text="\u23f0 Authorization timed out. Use /auth to try again.",
+        )
+    except asyncio.CancelledError:
+        print(f"[_poll_device_auth] Task cancelled for {telegram_id}")
+    except Exception as e:
+        print(f"[_poll_device_auth] Unexpected crash for {telegram_id}: {e}")
+        try:
+            await context.bot.send_message(chat_id=chat_id, text=f"[X] Unexpected auth error. Try /auth again.")
+        except:
+            pass
 
-        error = data.get("error", "")
-        if error == "slow_down":
-            poll_interval = data.get("interval", poll_interval + 5)
-        elif error == "expired_token":
-            await context.bot.send_message(
-                chat_id=chat_id,
-                text="[X] Authorization expired. Use /auth to try again.",
-            )
-            return
-        elif error not in ("authorization_pending", "slow_down", ""):
-            await context.bot.send_message(
-                chat_id=chat_id,
-                text=f"[X] Auth error: {data.get('error_description', error)}",
-            )
-            return
-
-    await context.bot.send_message(
-        chat_id=chat_id,
-        text="\u23f0 Authorization timed out. Use /auth to try again.",
-    )
 
 
 # --- /repo set handler - /repo owner/name ---------------------------------------------------------

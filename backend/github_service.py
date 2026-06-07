@@ -137,21 +137,14 @@ class GitHubService:
     ) -> dict:
         """
         Commits one or more staged files to GitHub.
-        staged_files: list of staged_files rows from Supabase.
-
-        For each file:
-          1. Fetch current GitHub content + SHA
-          2. Detect conflict (base_sha mismatch)
-          3. Apply diff to reconstruct new content
-          4. Commit via Contents API
-
-        Returns: { ok, commit_sha?, error?, conflict_files? }
+        Returns: { ok, commit_sha?, error?, conflict_files?, committed_ids? }
         """
         try:
             g = Github(token)
             repo = g.get_repo(repo_name)
             last_sha: Optional[str] = None
             conflict_files: list[str] = []
+            committed_ids: list[str] = []
 
             for staged in staged_files:
                 filepath = staged["filepath"]
@@ -159,81 +152,103 @@ class GitHubService:
                 is_binary = staged.get("is_binary", False)
                 full_content_b64 = staged.get("full_content")
                 diff_text = staged.get("diff")
+                file_id = staged.get("id")
 
-                # --- Fetch current GitHub state ------------------------------------------
-                gh_file = self.get_file_sha_and_content(token, repo_name, branch, filepath)
-                current_sha = gh_file["sha"]
-                current_content = gh_file["content"]
-                is_new_file = not gh_file["exists"] or stored_base_sha == "new_file"
+                try:
+                    # --- Fetch current GitHub state ------------------------------------------
+                    gh_file = self.get_file_sha_and_content(token, repo_name, branch, filepath)
+                    current_sha = gh_file["sha"]
+                    current_content = gh_file["content"]
+                    exists_on_gh = gh_file["exists"]
 
-                # --- Conflict check (skip for new files) ----------------------------
-                if not is_new_file and detect_conflict(stored_base_sha, current_sha):
-                    conflict_files.append(filepath)
-                    continue
-
-                # --- Handle deletions ----------------------------------------------------
-                change_type = staged.get("change_type", "modify")
-                if change_type == "delete" or stored_base_sha == "delete":
-                    if not gh_file["exists"]:
-                        # File already deleted on GitHub - nothing to do
-                        print(f"[github_service] Skip delete {filepath} - not on GitHub")
+                    # --- Handle deletions ----------------------------------------------------
+                    change_type = staged.get("change_type", "modify")
+                    if change_type == "delete" or stored_base_sha == "delete":
+                        if not exists_on_gh:
+                            print(f"[github_service] Skip delete {filepath} - not on GitHub")
+                            if file_id: committed_ids.append(file_id)
+                            continue
+                        result = repo.delete_file(
+                            path=filepath,
+                            message=commit_message,
+                            sha=current_sha,
+                            branch=branch,
+                        )
+                        last_sha = result["commit"].sha
+                        if file_id: committed_ids.append(file_id)
                         continue
-                    result = repo.delete_file(
-                        path=filepath,
-                        message=commit_message,
-                        sha=current_sha,
-                        branch=branch,
-                    )
+
+                    # --- Reconstruct final content -------------------------------------------
+                    if is_binary or full_content_b64:
+                        final_bytes = base64.b64decode(full_content_b64)
+                        content_to_commit = final_bytes
+                    else:
+                        # Text file - apply diff
+                        # For MVP: We are lenient. If diff applies to CURRENT content, we commit.
+                        base_content = current_content if exists_on_gh else ""
+                        new_content, success = apply_diff(base_content, diff_text)
+                        
+                        # Only report conflict if diff COMPELTELY fails AND it's not a force commit
+                        if not success and stored_base_sha != "force":
+                            # If we have a mismatch AND diff failed -> genuine conflict
+                            if stored_base_sha != current_sha and stored_base_sha != "new_file":
+                                conflict_files.append(filepath)
+                                continue
+                        
+                        new_content = new_content.replace("\r\n", "\n")
+                        content_to_commit = new_content.encode("utf-8")
+
+                    # --- Commit to GitHub ---------------------------------------------------------
+                    if not exists_on_gh:
+                        result = repo.create_file(
+                            path=filepath,
+                            message=commit_message,
+                            content=content_to_commit,
+                            branch=branch,
+                        )
+                    else:
+                        result = repo.update_file(
+                            path=filepath,
+                            message=commit_message,
+                            content=content_to_commit,
+                            sha=current_sha,
+                            branch=branch,
+                        )
                     last_sha = result["commit"].sha
-                    continue
+                    if file_id: committed_ids.append(file_id)
 
-                # --- Reconstruct final content -------------------------------------------
-                if is_binary or full_content_b64:
-                    # Binary or full-content file - decode base64 directly
-                    final_bytes = base64.b64decode(full_content_b64)
-                    content_to_commit = final_bytes
-                else:
-                    # Text file - apply diff to current GitHub content
-                    base_content = current_content if not is_new_file else ""
-                    new_content, success = apply_diff(base_content, diff_text)
-                    if not success:
-                        print(f"[github_service] Diff apply failed for {filepath}, using raw content")
-                    # Normalize before committing
-                    new_content = new_content.replace("\r\n", "\n")
-                    content_to_commit = new_content.encode("utf-8")
-
-                # --- Commit to GitHub ---------------------------------------------------------
-                if is_new_file:
-                    result = repo.create_file(
-                        path=filepath,
-                        message=commit_message,
-                        content=content_to_commit,
-                        branch=branch,
-                    )
-                else:
-                    result = repo.update_file(
-                        path=filepath,
-                        message=commit_message,
-                        content=content_to_commit,
-                        sha=current_sha,
-                        branch=branch,
-                    )
-                last_sha = result["commit"].sha
+                except Exception as e:
+                    print(f"[github_service] Error committing {filepath}: {e}")
+                    conflict_files.append(filepath)
 
             # --- Return result -------------------------------------------------------------------
-            if conflict_files and not last_sha:
+            if not committed_ids and conflict_files:
                 return {
                     "ok": False,
                     "error": "conflict",
                     "conflict_files": conflict_files,
-                    "message": "All selected files had conflicts",
+                    "message": "All selected files had conflicts or errors",
                 }
 
             return {
-                "ok": True,
+                "ok": len(committed_ids) > 0,
                 "commit_sha": last_sha,
-                "conflict_files": conflict_files,  # partial conflicts possible
+                "conflict_files": conflict_files,
+                "committed_ids": committed_ids,
             }
+
+        except GithubException as e:
+            if e.status == 409:
+                return {"ok": False, "error": "conflict", "message": "SHA conflict on GitHub"}
+            if e.status == 422:
+                msg = str(e.data.get("message", ""))
+                if "protected" in msg.lower() or "required" in msg.lower():
+                    return {"ok": False, "error": "branch_protected", "message": f"Branch is protected: {msg}"}
+                return {"ok": False, "error": "validation_failed", "message": f"GitHub validation failed: {msg}"}
+            return {"ok": False, "error": "github_error", "message": str(e.data)}
+        except Exception as e:
+            print(f"[github_service] commit_files error: {e}")
+            return {"ok": False, "error": "unknown", "message": str(e)}
 
         except GithubException as e:
             if e.status == 409:

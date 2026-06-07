@@ -13,7 +13,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { getConfig, isConfigured } from './config';
-import { syncFile, SyncFilePayload, extractErrorMessage } from './api';
+import { syncFile, syncState, SyncFilePayload, extractErrorMessage } from './api';
 
 // ── Git Extension API types (inline to avoid needing git.d.ts) ──────────────
 
@@ -151,6 +151,15 @@ export class GitPhoneSidebarProvider
       this._repo = repo;
       this._repoListener = repo.state.onDidChange(() => {
         this._onDidChangeTreeData.fire(undefined);
+        
+        // Reconcile state with backend (handles manual commits/reverts)
+        const config = getConfig();
+        if (config && isConfigured()) {
+          const dirtyPaths = this.allChanges.map(c => 
+            _relPath(c.uri.fsPath, repo.rootUri.fsPath)
+          );
+          syncState(config.telegramId, dirtyPaths);
+        }
       });
       this._onDidChangeTreeData.fire(undefined);
     };

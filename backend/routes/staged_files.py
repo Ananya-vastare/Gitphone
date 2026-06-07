@@ -14,11 +14,33 @@ from supabase_service import (
     clear_all_staged,
     get_staged_files_by_ids,
     mark_files_committed,
+    sync_pending_state,
 )
 from github_service import github_service
 from auth import require_api_key
 
 router = APIRouter()
+
+
+# --- POST /staged-files/sync-state --------------------------------------------
+
+class SyncStatePayload(BaseModel):
+    telegram_id: str
+    current_filepaths: list[str]
+
+
+@router.post("/staged-files/sync-state")
+async def sync_state_route(payload: SyncStatePayload, _auth: str = Depends(require_api_key)):
+    """
+    Called by extension whenever git state changes.
+    Ensures bot doesn't show files that were committed/reverted manually.
+    """
+    user = get_user_by_telegram_id(payload.telegram_id)
+    if not user:
+        raise HTTPException(status_code=401, detail="User not registered.")
+
+    count = sync_pending_state(payload.telegram_id, payload.current_filepaths)
+    return {"ok": True, "reconciled_count": count}
 
 
 # --- GET /staged-files/{telegram_id} ------------------------------------------

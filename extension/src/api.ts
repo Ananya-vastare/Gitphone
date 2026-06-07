@@ -92,6 +92,27 @@ export async function syncFile(payload: SyncFilePayload): Promise<SyncFileRespon
   return response.data;
 }
 
+/**
+ * Reconcile local git state with backend 'pending' list.
+ */
+export async function syncState(telegramId: string, currentFilepaths: string[]): Promise<void> {
+  try {
+    await axios.post(
+      `${baseUrl()}/staged-files/sync-state`,
+      {
+        telegram_id: telegramId,
+        current_filepaths: currentFilepaths,
+      },
+      {
+        timeout: 8000,
+        headers: authHeaders(),
+      },
+    );
+  } catch (err) {
+    console.warn('[GitPhone] syncState failed:', err);
+  }
+}
+
 
 /**
  * Extract a human-readable error message from an axios error.

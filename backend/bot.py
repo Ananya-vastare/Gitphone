@@ -990,16 +990,21 @@ async def commit_now_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
     if result["ok"]:
         commit_sha = result["commit_sha"]
         short_sha = commit_sha[:7] if commit_sha else "unknown"
-        committed_files = [r["filepath"] for r in staged_rows]
-        default_branch = github_service.get_default_branch(user["github_token"], active_repo)
+        committed_ids = result.get("committed_ids", [])
+        
+        # Only mark files that were ACTUALLY committed as 'committed'
+        mark_files_committed(committed_ids)
+        
+        # Log only committed files
+        committed_rows = [r for r in staged_rows if r["id"] in committed_ids]
+        committed_paths = [r["filepath"] for r in committed_rows]
 
-        mark_files_committed(file_ids)
         insert_commit_log({
             "telegram_id": telegram_id,
             "user_id": user["id"],
             "commit_sha": commit_sha or "unknown",
             "message": commit_message,
-            "files": committed_files,
+            "files": committed_paths,
             "repo": active_repo,
             "branch": active_branch,
             "was_scheduled": False,
@@ -1011,9 +1016,12 @@ async def commit_now_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
             branch=active_branch,
             commit_sha=commit_sha or "unknown",
             message=commit_message,
-            files=committed_files,
+            files=committed_paths,
             was_forced=False,
         )
+
+        # Clear selection on success
+        context.user_data["selected_files"] = set()
 
         conflict_note = ""
         if result.get("conflict_files"):
@@ -1136,14 +1144,21 @@ async def commit_force_callback(update: Update, context: ContextTypes.DEFAULT_TY
     if result["ok"]:
         commit_sha = result["commit_sha"]
         short_sha = commit_sha[:7] if commit_sha else "unknown"
-        committed_files = [r["filepath"] for r in staged_rows]
-        mark_files_committed(file_ids)
+        committed_ids = result.get("committed_ids", [])
+        
+        # Mark files as committed
+        mark_files_committed(committed_ids)
+        
+        # Log only committed files
+        committed_rows = [r for r in staged_rows if r["id"] in committed_ids]
+        committed_paths = [r["filepath"] for r in committed_rows]
+
         insert_commit_log({
             "telegram_id": telegram_id,
             "user_id": user["id"],
             "commit_sha": commit_sha or "unknown",
             "message": commit_message,
-            "files": committed_files,
+            "files": committed_paths,
             "repo": active_repo,
             "branch": active_branch,
             "was_scheduled": False,
@@ -1154,12 +1169,16 @@ async def commit_force_callback(update: Update, context: ContextTypes.DEFAULT_TY
             branch=active_branch,
             commit_sha=commit_sha or "unknown",
             message=commit_message,
-            files=committed_files,
+            files=committed_paths,
             was_forced=True,
         )
+        
+        # Clear selection
+        context.user_data["selected_files"] = set()
+
         await query.edit_message_text(
             f"[OK] *Force committed!*\n\n"
-            f"[Link] `{short_sha}`\n"
+            f"[Link] [`{short_sha}`](https://github.com/{active_repo}/commit/{commit_sha})\n"
             f"\U0001f4ac {commit_message}\n"
             f"[Branch] `{active_branch}` \u2022 `{active_repo}`",
             parse_mode=ParseMode.MARKDOWN

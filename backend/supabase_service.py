@@ -262,6 +262,44 @@ def clear_all_staged(telegram_id: str) -> int:
         return 0
 
 
+def sync_pending_state(telegram_id: str, current_filepaths: list[str]) -> int:
+    """
+    State Reconciliation:
+    Marks any 'pending' file as 'committed' if its path is NOT in current_filepaths.
+    Returns the count of files synchronized.
+    """
+    try:
+        db = get_client()
+        # 1. Get all pending files for this user
+        result = db.table("staged_files") \
+            .select("id, filepath") \
+            .eq("telegram_id", telegram_id) \
+            .eq("status", "pending") \
+            .execute()
+        
+        if not result.data:
+            return 0
+        
+        # 2. Identify files that are no longer dirty in VS Code
+        to_mark_committed = []
+        for row in result.data:
+            if row["filepath"] not in current_filepaths:
+                to_mark_committed.append(row["id"])
+        
+        # 3. Batch update them to 'committed'
+        if to_mark_committed:
+            db.table("staged_files") \
+                .update({"status": "committed"}) \
+                .in_("id", to_mark_committed) \
+                .execute()
+            return len(to_mark_committed)
+        
+        return 0
+    except Exception as e:
+        print(f"[supabase] sync_pending_state error: {e}")
+        return 0
+
+
 # --- Admin Operations -------------------------------------------------------------------------------------
 
 def ban_user(telegram_id: str, reason: str = "") -> bool:

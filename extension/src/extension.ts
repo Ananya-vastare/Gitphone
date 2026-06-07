@@ -10,6 +10,12 @@ import {
   showFileDiff,
   syncStagedToBackend,
 } from './stagedFilesProvider';
+import {
+  onFileSaved,
+  onFileCreated,
+  onFileDeleted,
+  onFileRenamed,
+} from './fileWatcher';
 import axios from 'axios';
 
 // --- Global provider instance -------------------------------------------------
@@ -31,6 +37,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   });
   context.subscriptions.push(treeView);
   context.subscriptions.push({ dispose: () => sidebarProvider.dispose() });
+
+  // --- Register file watchers (Real-time Sync) -------------------------------
+  context.subscriptions.push(
+    vscode.workspace.onDidSaveTextDocument(onFileSaved),
+    vscode.workspace.onDidCreateFiles(e => e.files.forEach(onFileCreated)),
+    vscode.workspace.onDidDeleteFiles(e => e.files.forEach(onFileDeleted)),
+    vscode.workspace.onDidRenameFiles(e => e.files.forEach(f => onFileRenamed(f.oldUri, f.newUri)))
+  );
 
   // Badge = total changes (fires every time git state changes)
   sidebarProvider.onDidChangeTreeData(() => {

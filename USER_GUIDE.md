@@ -11,7 +11,7 @@ Welcome to **GitPhone**! This guide will help you set up and master the art of c
 *   **Marketplace Link:** [GitPhone on VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=ankittroy-21.gitphone)
 *   **Install:** Click Install.
 
-![GitPhone on Marketplace](public/images/Gitphone-1.png)
+![GitPhone on Marketplace](public/Images/Gitphone-1.png)
 *Finding the extension on the marketplace.*
 
 ### 2. Connect the Telegram Bot
@@ -24,7 +24,7 @@ Welcome to **GitPhone**! This guide will help you set up and master the art of c
 *   Click **"Connect GitPhone"**.
 *   Enter your **Telegram ID** (the bot provides this when you send `/start`).
 
-![Extension Setup Screen](public/images/Extension.png)
+![Extension Setup Screen](public/Images/Extension.png)
 *Linking your VS Code extension to your Telegram account.*
 
 ---
@@ -44,7 +44,7 @@ Simply write code in VS Code. Every time you **save a file**, GitPhone automatic
     *   **Recommendation:** Always select "Create new branch" to create a feature branch.
 6.  **Commit & Merge:** Once committed, the bot will send you a **Pull Request link**. Click it to merge your changes into `main` via the GitHub mobile interface.
 
-![Bot Commit Success](public/images/Bot.png)
+![Bot Commit Success](public/Images/Bot.png)
 *A successful commit and PR link sent to Telegram.*
 
 ---

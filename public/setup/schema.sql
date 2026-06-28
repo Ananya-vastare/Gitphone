@@ -16,13 +16,17 @@ CREATE TABLE users (
   id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   telegram_id     TEXT NOT NULL UNIQUE,
   github_token    TEXT NOT NULL,          -- plain text in MVP (AES-256 post MVP)
+  api_key_hash    TEXT,                   -- SHA-256 hash of per-user API key
   default_repo    TEXT NOT NULL,          -- format: "username/repo-name"
+  active_repo     TEXT,                   -- auto-detected from VS Code .git/config
   branch          TEXT NOT NULL DEFAULT 'main',
+  active_branch   TEXT,                   -- auto-detected from VS Code .git/HEAD
   timezone        TEXT NOT NULL DEFAULT 'UTC',
   schema_version  INT NOT NULL DEFAULT 1,
   last_active     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   status          TEXT NOT NULL DEFAULT 'active',
                   -- values: active | inactive_7d | dormant
+  ban_reason      TEXT,                   -- reason if banned by admin
   ping_count      INT NOT NULL DEFAULT 0,
   created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -41,11 +45,14 @@ CREATE TABLE staged_files (
   user_id       UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   telegram_id   TEXT NOT NULL,             -- denormalized for fast bot queries
   filepath      TEXT NOT NULL,             -- relative path from workspace root
+  repo          TEXT,                      -- auto-detected repo name (for grouped view)
   diff          TEXT,                      -- unified diff patch (NULL if binary)
   full_content  TEXT,                      -- base64 content (binary/new files)
   base_sha      TEXT NOT NULL,             -- git SHA diff was computed against
   is_binary     BOOLEAN NOT NULL DEFAULT FALSE,
   file_size     INT NOT NULL DEFAULT 0,    -- bytes
+  change_type   TEXT NOT NULL DEFAULT 'modify',
+                -- values: modify | create | delete
   status        TEXT NOT NULL DEFAULT 'pending',
                 -- values: pending | committed | expired | conflict
   staged_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),

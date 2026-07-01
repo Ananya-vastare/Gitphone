@@ -1,0 +1,33 @@
+# ruff.toml — GitPhone linting configuration
+# Docs: https://docs.astral.sh/ruff/configuration/
+
+[lint]
+# Enable a curated, contributor-friendly rule set.
+# Avoids rules that require opinionated rewrites and focuses on real bugs.
+select = [
+  "E",   # pycodestyle errors (syntax, spacing)
+  "W",   # pycodestyle warnings
+  "F",   # pyflakes (undefined names, unused imports)
+  "B",   # flake8-bugbear (common bugs)
+  "I",   # isort (import ordering)
+  "UP",  # pyupgrade (modern Python syntax)
+]
+
+ignore = [
+  "E501",  # line too long — handled by formatter, not a blocker
+  "B008",  # function calls in default args (FastAPI depends on this pattern)
+  "B904",  # raise from — optional style preference
+  "UP007", # use X | Y for union types — requires Python 3.10+
+]
+
+# Don't fix these automatically so contributors see what needs changing
+unfixable = ["F401"]   # unused imports — contributor should decide
+
+[lint.per-file-ignores]
+# Migration files often have auto-generated code
+"backend/migrations/**" = ["E", "W", "F"]
+
+[format]
+# Use double quotes consistently
+quote-style = "double"
+indent-style = "space"

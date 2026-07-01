@@ -1,9 +1,9 @@
-fastapi
-uvicorn[standard]
+fastapi>=0.111.0,<1.0.0
+uvicorn[standard]>=0.29.0,<1.0.0
 python-telegram-bot==21.*
-PyGithub
-diff-match-patch
-supabase
-python-dotenv
-pydantic
-httpx
+PyGithub>=2.3.0,<3.0.0
+diff-match-patch>=20230430
+supabase>=2.4.0,<3.0.0
+python-dotenv>=1.0.0,<2.0.0
+pydantic>=2.7.0,<3.0.0
+httpx>=0.27.0,<1.0.0

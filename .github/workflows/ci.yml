@@ -11,7 +11,8 @@ jobs:
   label-check:
     name: PR — ECSoC26 Label Required
     runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request'
+    # Skip this check for Dependabot — it can't add labels automatically
+    if: github.event_name == 'pull_request' && github.actor != 'dependabot[bot]'
     steps:
       - name: Check for ECSoC26 label
         uses: actions/github-script@v7

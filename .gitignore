@@ -1,6 +1,7 @@
 # ── Private context files (not for public) ───────────────────────────────────
 DEV_FLOW.md
 Context.md
+admin_guide.md
 
 # ── Secrets — NEVER commit these ─────────────────────────────────────────────
 .env

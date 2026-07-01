@@ -1,0 +1,14 @@
+# CODEOWNERS — auto-assigns reviewers to PRs
+# Docs: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+# Admin is auto-requested as reviewer on every PR
+*                         @ankittroy-21
+
+# Backend changes → admin review required
+backend/                  @ankittroy-21
+
+# Extension changes → admin review required
+extension/src/            @ankittroy-21
+
+# CI and GitHub config → admin review required (extra sensitive)
+.github/                  @ankittroy-21

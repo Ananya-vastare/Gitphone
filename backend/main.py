@@ -8,6 +8,23 @@ import os
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from telegram import Update
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+
+async def get_telegram_user_id(request: Request) -> str:
+    try:
+        body = await request.json()
+        if "message" in body and "from" in body["message"]:
+            return str(body["message"]["from"]["id"])
+        if "callback_query" in body and "from" in body["callback_query"]:
+            return str(body["callback_query"]["from"]["id"])
+    except Exception:
+        pass
+    return get_remote_address(request)
+
+limiter = Limiter(key_func=get_telegram_user_id)
+
 from telegram.ext import Application
 
 from bot import (
@@ -104,10 +121,13 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan,
 )
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 
 # --- Telegram Webhook Route ------------------------------------------------------------------------------
 @app.post("/webhook")
+@limiter.limit("30/minute")
 async def telegram_webhook(request: Request):
     data = await request.json()
     update = Update.de_json(data, telegram_app.bot)

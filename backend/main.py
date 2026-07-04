@@ -5,9 +5,22 @@ Deployed on Render (free tier, webhook mode = no sleeping).
 """
 
 import os
+import json
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, Header, HTTPException
 from telegram import Update
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+
+def get_telegram_user_id(request: Request) -> str:
+    telegram_id = getattr(request.state, "telegram_user_id", None)
+    if telegram_id:
+        return telegram_id
+    return get_remote_address(request)
+
+limiter = Limiter(key_func=get_telegram_user_id)
+
 from telegram.ext import Application
 
 from bot import (
@@ -104,10 +117,32 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan,
 )
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+
+@app.middleware("http")
+async def extract_telegram_user_id(request: Request, call_next):
+    if request.url.path == "/webhook" and request.method == "POST":
+        try:
+            body_bytes = await request.body()
+            body_json = json.loads(body_bytes)
+            if "message" in body_json and "from" in body_json["message"]:
+                request.state.telegram_user_id = str(body_json["message"]["from"]["id"])
+            elif "callback_query" in body_json and "from" in body_json["callback_query"]:
+                request.state.telegram_user_id = str(body_json["callback_query"]["from"]["id"])
+            
+            async def receive():
+                return {"type": "http.request", "body": body_bytes}
+            request._receive = receive
+        except Exception:
+            pass
+    return await call_next(request)
 
 
 # --- Telegram Webhook Route ------------------------------------------------------------------------------
 @app.post("/webhook")
+@limiter.limit("30/minute")
 async def telegram_webhook(
     request: Request,
     x_telegram_bot_api_secret_token: str = Header(None)

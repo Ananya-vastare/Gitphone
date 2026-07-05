@@ -93,11 +93,15 @@ async def lifespan(app: FastAPI):
     """Set webhook on startup, clean up on shutdown."""
     webhook_url = os.environ.get("WEBHOOK_URL", "").rstrip("/")
     await telegram_app.initialize()
-    await telegram_app.bot.set_webhook(
-        url=f"{webhook_url}/webhook",
-        allowed_updates=["message", "callback_query"],
-    )
-    print(f"[main] Webhook set to {webhook_url}/webhook")
+    webhook_kwargs = {
+        "url": f"{webhook_url}/webhook",
+        "allowed_updates": ["message", "callback_query"],
+    }
+    secret_token = os.environ.get("TELEGRAM_SECRET_TOKEN")
+    if secret_token:
+        webhook_kwargs["secret_token"] = secret_token
+    await telegram_app.bot.set_webhook(**webhook_kwargs)
+    print(f"[main] Webhook set to {webhook_url}/webhook (secret_token={'set' if secret_token else 'not set'})")
     await telegram_app.start()
 
     # Init channel logger and announce startup

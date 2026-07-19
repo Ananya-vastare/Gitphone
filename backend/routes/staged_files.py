@@ -133,6 +133,7 @@ async def commit_direct(payload: DirectCommitPayload, telegram_id: str = Depends
         raise HTTPException(status_code=400, detail="No file IDs provided.")
 
     staged_files = get_staged_files_by_ids(payload.file_ids)
+    staged_files = [f for f in staged_files if f["telegram_id"] == telegram_id]
     if not staged_files:
         raise HTTPException(status_code=404, detail="No staged files found with given IDs.")
 
